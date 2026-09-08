@@ -1,0 +1,21 @@
+# 构建产物
+/target
+
+# 真实配置与凭据——永不提交
+config.toml
+.env
+# 只排除运行时产出的 cookie 文件（注意：不要用 *cookie* 这种宽匹配，会误伤 src/bin/ 源码）
+/csdn_cookies*
+*.cookie
+
+# 运行日志与诊断产物
+*.log
+/logs/
+/debug/
+
+# IDE
+.idea/
+.vscode/
+
+# 运行日志
+/logs/
