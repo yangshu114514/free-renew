@@ -1,0 +1,34 @@
+[package]
+name = "free-renew"
+version = "0.1.0"
+edition = "2021"
+description = "Auto renewal for abeiyun/sanfengyun free servers"
+license = "Apache-2.0"
+
+[dependencies]
+reqwest = { version = "0.12", features = ["blocking", "multipart", "cookies", "json", "gzip"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 截图：headless chromium（系统装的 chrome/edge 也行）
+headless_chrome = "1.0"
+
+# git 操作（publish 文章到 Pages 仓库）
+git2 = { version = "0.18", default-features = false, features = ["https", "ssh"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"            # 全程序跨 crate 优化
+codegen-units = 1      # 单编译单元，最大化优化空间
+strip = "symbols"      # 剥符号表
+panic = "abort"        # 去 unwind 表；续期作业 panic 即失败退出，符合语义

@@ -1,0 +1,57 @@
+# free-renew 完整配置模板
+# 复制为 config.toml 后填写；config.toml 已被 .gitignore 排除，永远不要提交真实配置。
+# 环境变量优先级高于本文件（GitHub Actions Secrets 走环境变量即可，本地用文件更方便）。
+
+# ── 云账号 ─────────────────────────────────────────────
+[clouds.sanfengyun]
+username = "13800000000"       # 手机号
+password = "your-password"
+enabled = true                 # false = 本轮跳过该账号
+
+[clouds.abeiyun]
+username = "13800000000"
+password = "your-password"
+enabled = true
+
+# ── 发文平台 ───────────────────────────────────────────
+[platform]
+provider = "csdn"              # 当前支持: csdn
+
+[platform.csdn]
+# 完整 Cookie（单行 k=v; k=v 形态，由 csdn_cookie_export 采集器产出）
+# 也可用环境变量 CSDN_COOKIES 传入
+cookie = "UserName=xxx; UserToken=xxx; UN=xxx; ..."
+creation_statement = 1         # 创作声明: 0=无声明 1=部分内容由AI辅助生成 2=整合创作 3=个人观点
+tags = ["云服务器", "Linux"]    # 最多 5 个
+categories = []                # 需为博客中已存在的分类名
+enabled = true
+
+# 协议常量覆盖（一般不用动；CSDN 更换 secret 时才需要）
+# app_secret = "..."
+# x_ca_key = "..."
+
+# ── AI 文章生成（OpenAI 兼容接口）─────────────────────
+[ai]
+base_url = "https://api.example.com/v1"   # 或环境变量 LLM_BASE_URL
+api_key = "sk-..."                        # 或环境变量 LLM_API_KEY
+model = "gpt-4o-mini"                     # 或环境变量 LLM_MODEL
+max_retries = 3                           # 生成不合规时的重试上限
+
+# 可选自定义（留空/省略则用内置默认）
+# angles = [                              # 每篇随机抽一个角度，保证文章不重复
+#   "从零开始第一次用云服务器的新手视角，写踩坑和摸索过程",
+#   "记录一次具体的部署经历，带操作细节",
+# ]
+# lengths = [300, 420, 500]               # 目标字数池
+# forbidden_words = ["申请延期", "续期"]   # 出现即判定不合规，自动重写
+# required_keywords = ["免费云服务器", "免费虚拟主机"]
+
+# ── 失败通知（OpenClaw webhook，可省略）───────────────
+[notify]
+webhook_url = ""               # 或环境变量 NOTIFY_WEBHOOK_URL
+tag = "renewal"
+
+# ── 限额 ───────────────────────────────────────────────
+[limits]
+article_ready_timeout = 300    # 等文章可访问的超时（秒）
+http_timeout = 30              # 单请求超时（秒）
