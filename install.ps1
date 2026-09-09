@@ -117,6 +117,8 @@ Ok "LLM 配置完成"
 # ── [4/6] CSDN Cookie ────────────────────────────────────────
 Step 4 "CSDN Cookie（发文平台登录态）"
 $cookieFile = Join-Path $env:TEMP "csdn_cookies_oneline.txt"
+# 先删旧文件：防止刷新脚本失败时把上一次运行的残留 Cookie 当新 Cookie 写入
+Remove-Item $cookieFile -Force -ErrorAction SilentlyContinue
 $scriptPath = Join-Path (Get-Location) "scripts\refresh-csdn-cookie.ps1"
 if (Test-Path $scriptPath) {
     Write-Host "即将弹出浏览器: 扫码登录 CSDN（专用 profile，登录态会保留供日后刷新）"
@@ -126,11 +128,14 @@ if (Test-Path $scriptPath) {
 } else {
     Die "找不到 scripts/refresh-csdn-cookie.ps1（请在完整仓库目录内运行本向导）"
 }
-if (Test-Path $cookieFile) {
-    Set-GhSecret "CSDN_COOKIES" (Get-Content $cookieFile -Raw).Trim()
-} else {
+if (-not (Test-Path $cookieFile)) {
     Die "Cookie 文件未产出。请重跑本向导或手动执行 scripts/refresh-csdn-cookie.ps1"
 }
+$cookieAge = ((Get-Date) - (Get-Item $cookieFile).LastWriteTime).TotalMinutes
+if ($cookieAge -gt 2) {
+    Die "Cookie 文件是 $([math]::Round($cookieAge)) 分钟前的残留，疑似本次刷新失败。请重跑。"
+}
+Set-GhSecret "CSDN_COOKIES" (Get-Content $cookieFile -Raw).Trim()
 Ok "CSDN Cookie 完成（寿命数月，过期时微信会提醒你重跑刷新脚本）"
 
 # ── [5/6] 通知 ───────────────────────────────────────────────
@@ -207,6 +212,15 @@ if (Test-Path $wfPath) {
 
 # 首跑
 Write-Host ""
+# 官方规则：fork 出来的仓库 scheduled workflows 默认禁用，必须先 Enable 一次
+if ($repo -ne $UPSTREAM -and (git config --get remote.origin.url) -match "fork") {
+    Write-Host "  检测到 fork 仓库：GitHub 默认禁用 fork 的定时任务，需要启用一次..." -ForegroundColor Yellow
+    $wfId = "free-server-renewal"
+    gh api -X PUT "repos/$repo/actions/workflows/$wfId.yml/enable" 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { Ok "定时任务已启用" } else {
+        Warn "自动启用失败——请到仓库 Actions 页选中 free-server-renewal 点 Enable workflow"
+    }
+}
 gh workflow run free-server-renewal @repoArg 2>&1 | Out-Null
 if ($LASTEXITCODE -eq 0) {
     Ok "首次运行已触发: https://github.com/$repo/actions"
@@ -221,6 +235,6 @@ Write-Host @"
 后续你唯一可能要做的事:
   • CSDN Cookie 过期(数月后) → 微信收到提醒 → 重跑 scripts/refresh-csdn-cookie.ps1
   • 密码轮换 → 仓库 Settings→Secrets 直接改
-  • 一切正常时它只是每天 09:30 默默看一眼，没到期 4 秒退出
-到期日临近时你会收到微信通知。祝薅羊毛愉快 🐑
+  • 一切正常时它只是每天定时默默看一眼，没到期 4 秒退出
+到期日临近时你会收到微信通知。
 "@ -ForegroundColor Green
