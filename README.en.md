@@ -80,6 +80,12 @@ Fork / push to your **private** repo, set repo Secrets (env-var equivalents of c
 
 Configuration precedence: **environment variables > config.toml > built-in defaults**.
 
+> 📖 Full setup guide + maintenance playbook (one-command secrets, OpenClaw WeChat notification wiring, 30-second cookie refresh, troubleshooting table): **[docs/SETUP.md](docs/SETUP.md)** (Chinese).
+
+## Cookie maintenance (the only periodic manual task)
+
+CSDN cookies last for months. On expiry: WeChat notification → re-run `.\scripts\refresh-csdn-cookie.ps1` → dedicated browser profile usually still logged in → cookie re-exported → press `y` to push to GitHub Secrets. Done in 30 seconds. The system never fails silently.
+
 ## Project layout
 
 ```
