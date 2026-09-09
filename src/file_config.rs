@@ -104,6 +104,24 @@ pub struct NotifySection {
     pub webhook_url: String,
     #[serde(default = "default_notify_tag")]
     pub tag: String,
+    /// OpenClaw 通知后端：配置后走网关 chatCompletions → agent → 微信
+    #[serde(default)]
+    pub openclaw: Option<OpenClawNotifyConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpenClawNotifyConfig {
+    /// 网关 chatCompletions 公网地址（如 https://shuyang.cc.cd/v1/chat/completions）
+    pub url: String,
+    pub basic_user: String,
+    pub basic_password: String,
+    /// 固定 "openclaw"（网关按 agentId 路由）
+    #[serde(default = "default_openclaw_model")]
+    pub model: String,
+}
+
+fn default_openclaw_model() -> String {
+    "openclaw".into()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -121,6 +139,7 @@ impl Default for NotifySection {
         Self {
             webhook_url: String::new(),
             tag: default_notify_tag(),
+            openclaw: None,
         }
     }
 }

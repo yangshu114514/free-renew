@@ -46,10 +46,19 @@ max_retries = 3                           # 生成不合规时的重试上限
 # forbidden_words = ["申请延期", "续期"]   # 出现即判定不合规，自动重写
 # required_keywords = ["免费云服务器", "免费虚拟主机"]
 
-# ── 失败通知（OpenClaw webhook，可省略）───────────────
+# ── 失败/成功通知 ──────────────────────────────────────
 [notify]
-webhook_url = ""               # 或环境变量 NOTIFY_WEBHOOK_URL
+webhook_url = ""               # 通用 webhook（备用）；或环境变量 NOTIFY_WEBHOOK_URL
 tag = "renewal"
+
+# OpenClaw 后端（推荐）：通知经网关 agent → 微信送达
+# URL 形如 https://<你的网关域名>/v1/chat/completions
+# 需要：网关开启 http.endpoints.chatCompletions + lighttpd /v1/ 段 basic auth 用户
+[notify.openclaw]
+url = "https://shuyang.cc.cd/v1/chat/completions"
+basic_user = "freerenew"
+basic_password = "..."          # 或环境变量 NOTIFY_OPENCLAW_PASSWORD
+model = "openclaw"              # 固定值：网关按 agent 路由到其配置的模型
 
 # ── 限额 ───────────────────────────────────────────────
 [limits]

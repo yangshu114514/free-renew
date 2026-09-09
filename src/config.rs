@@ -71,6 +71,16 @@ pub struct CsdnConfig {
 pub struct NotifyConfig {
     pub webhook_url: String,
     pub tag: String,
+    /// OpenClaw 后端（Some 时优先于 webhook_url）
+    pub openclaw: Option<OpenClawNotify>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenClawNotify {
+    pub url: String,
+    pub basic_user: String,
+    pub basic_password: String,
+    pub model: String,
 }
 
 #[derive(Debug, Clone)]
@@ -190,9 +200,16 @@ impl AppConfig {
 
         // ---- 通知 ----
         let notify_file = file.as_ref().map(|f| f.notify.clone()).unwrap_or_default();
+        let openclaw = notify_file.openclaw.map(|o| OpenClawNotify {
+            url: env("NOTIFY_OPENCLAW_URL").unwrap_or(o.url),
+            basic_user: env("NOTIFY_OPENCLAW_USER").unwrap_or(o.basic_user),
+            basic_password: env("NOTIFY_OPENCLAW_PASSWORD").unwrap_or(o.basic_password),
+            model: env("NOTIFY_OPENCLAW_MODEL").unwrap_or(o.model),
+        });
         let notify = NotifyConfig {
             webhook_url: env("NOTIFY_WEBHOOK_URL").unwrap_or(notify_file.webhook_url),
             tag: notify_file.tag,
+            openclaw,
         };
 
         // ---- 限额 ----
