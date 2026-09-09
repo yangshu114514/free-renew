@@ -33,6 +33,8 @@ pub static CLOUDS: &[CloudProfile] = &[
     },
 ];
 
+/// 按 key 查厂商静态档案（公共 API，供未来扩展/诊断用）。
+#[allow(dead_code)]
 pub fn cloud_profile(key: &str) -> Option<&'static CloudProfile> {
     CLOUDS.iter().find(|p| p.key == key)
 }

@@ -4,11 +4,11 @@
 //! - 必含厂商名 + "免费虚拟主机""免费云服务器"
 //! - >150 字使用感受
 //! - 禁止出现"申请延期"字样
+//!
 //! 全部可通过 config.toml [ai] 节覆盖/追加。
 
 use anyhow::{bail, Context, Result};
 use rand::seq::SliceRandom;
-use rand::Rng;
 use serde_json::json;
 
 use crate::config::LlmConfig;
@@ -178,15 +178,4 @@ pub fn generate_article(llm: &LlmConfig, vendor: &str) -> Result<Article> {
     }
 
     bail!("生成文章 {} 次仍不合规，放弃本次（宁缺毋滥，不做垃圾提交）", llm.max_retries)
-}
-
-/// 随机文件名后缀。
-pub fn random_suffix(n: usize) -> String {
-    let mut rng = rand::thread_rng();
-    (0..n)
-        .map(|_| {
-            let idx = rng.gen_range(0..36);
-            if idx < 26 { (b'a' + idx as u8) as char } else { (b'0' + (idx - 26) as u8) as char }
-        })
-        .collect()
 }
