@@ -130,19 +130,21 @@ if ($ut -and $ut.expires) {
 }
 
 # ── 可选直传 Secret ───────────────────────────────────────────
+# gh secret set --repo 支持 owner/repo 简名；实测也接受完整 https URL（已验证）。
+# 但 git@ 形态 URL 不一定，这里统一把任意 remote url 规范化为 owner/repo。
 $hasGh = Get-Command gh -ErrorAction SilentlyContinue
-$inRepo = $false; $repoUrl = $null
+$inRepo = $false; $repoSlug = $null
 try {
     if ((git rev-parse --is-inside-work-tree 2>$null) -eq "true") {
         $u = git config --get remote.origin.url 2>$null
-        if ($u) { $inRepo = $true; $repoUrl = $u }
+        if ($u -match "github\.com[:/](.+?)(\.git)?/?$") { $repoSlug = $Matches[1]; $inRepo = $true }
     }
 } catch {}
 if ($hasGh -and $inRepo) {
-    $ans = Read-Host "检测到 gh CLI + git 仓库,直接更新 Secret CSDN_COOKIES? (y/n)"
+    $ans = Read-Host "检测到 gh CLI + git 仓库，直接更新 Secret CSDN_COOKIES? (y/n)"
     if ($ans -eq "y") {
-        $singleLine | gh secret set CSDN_COOKIES --body - --repo $repoUrl
-        if ($LASTEXITCODE -eq 0) { Write-Host "OK: Secret CSDN_COOKIES 已更新,下轮生效" }
+        $singleLine | gh secret set CSDN_COOKIES --body - --repo $repoSlug
+        if ($LASTEXITCODE -eq 0) { Write-Host "OK: Secret CSDN_COOKIES 已更新，下轮运行即生效" }
     }
 } else {
     Write-Host "(不在 git 仓库或无 gh CLI: 手动把 $OutFile 内容填入 Secret)"
