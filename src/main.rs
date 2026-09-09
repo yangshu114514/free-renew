@@ -243,6 +243,19 @@ fn main() -> Result<()> {
         .map(std::path::PathBuf::from);
 
     let cfg = AppConfig::load(config_path.as_deref());
+
+    // --test-notify 子命令：端到端验证通知链路（正式格式）
+    if std::env::args().any(|a| a == "--test-notify") {
+        let title = "free-renew 通知链路自检";
+        let detail = format!(
+            "通知后端: {}\n本轮为人工触发测试，非真实续期。你看到这条消息说明: Actions → 网关 → agent → 微信 全链路可用。",
+            if cfg.notify.openclaw.is_some() { "openclaw(网关agent→微信)" } else { "webhook" }
+        );
+        notify::send(&cfg.notify, title, &detail);
+        println!("通知已投递（fire-and-forget），查微信。");
+        return Ok(());
+    }
+
     if cfg.accounts.is_empty() {
         run.event("run.config", "failed", json!({"reason": "no_accounts"}));
         anyhow::bail!("未配置任何云账号（config.toml [clouds.*] 或 *_USERNAME/PASSWORD 环境变量）");
