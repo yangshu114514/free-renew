@@ -177,7 +177,8 @@ impl CloudClient {
         })
     }
 
-    /// 延期记录列表（审核状态查询，只读）。
+    /// 延期记录列表（审核状态查询，只读）。日常流程不调用，供手动诊断。
+    #[allow(dead_code)]
     pub fn review_history(&self) -> Result<Value> {
         let url = self.account.profile.renew_url;
         let body = self
