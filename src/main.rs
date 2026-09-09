@@ -174,6 +174,8 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
                 "vendor": vendor, "url": url, "raw": r.raw,
             }));
             tracing::info!("{vendor} 续期提交成功");
+            // 成功也通知：不加通知的话，唯一能确认"它活着"的方式是它一直失败
+            notify::send(&cfg.notify, &format!("{vendor} 续期已提交"), &format!("文章: {url}\n等待厂商人工审核，审核结果见下轮运行日志。"));
             Ok(true)
         }
         Ok(r) => {
