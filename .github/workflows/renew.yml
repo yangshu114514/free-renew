@@ -36,8 +36,10 @@ jobs:
           # 发文平台
           PLATFORM_PROVIDER: csdn
           CSDN_COOKIES: ${{ secrets.CSDN_COOKIES }}
-          # 失败通知
-          NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
+          # 失败/成功通知（OpenClaw 后端：网关 agent → 微信）
+          NOTIFY_OPENCLAW_URL: ${{ secrets.NOTIFY_OPENCLAW_URL }}
+          NOTIFY_OPENCLAW_USER: ${{ secrets.NOTIFY_OPENCLAW_USER }}
+          NOTIFY_OPENCLAW_PASSWORD: ${{ secrets.NOTIFY_OPENCLAW_PASSWORD }}
           # headless chrome
           CHROME_PATH: /usr/bin/google-chrome
           # 失败诊断产物目录（artifact 上传用）
