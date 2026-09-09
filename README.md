@@ -78,14 +78,28 @@ GitHub Actions cron（每天 09:30 北京时间，幂等）
 
 ## 快速开始
 
-### 1. 本地构建
+### 一键安装（推荐，仓库公开后可用）
+
+本地登录 GitHub CLI（`gh auth login`）后：
+
+```powershell
+# Windows PowerShell（仓库公开时可直接远程拉取向导）
+irm https://raw.githubusercontent.com/yangshu114514/free-renew/main/install.ps1 | iex
+# 仓库私有/离线场景：clone 后在仓库目录内运行 .\install.ps1，效果相同
+```
+
+向导会依次询问：仓库（自动 fork）→ 两家云账号 → LLM 配置（可选连通性测试，默认跳过）→ CSDN 扫码 → 通知后端（OpenClaw 微信 / Webhook / 暂不）→ 每天几点跑（默认 9:30）→ 确认部署 → 自动触发首跑。
+
+### 手动安装
+
+#### 1. 本地构建
 
 ```bash
 cargo build --release
 # 产物 ~9MB 单二进制（lto=fat + codegen-units=1 + strip + panic=abort）
 ```
 
-### 2. 准备配置
+#### 2. 准备配置
 
 ```bash
 cp config.example.toml config.toml
@@ -99,7 +113,7 @@ cargo run --release --bin csdn_cookie_export
 # 产出 csdn_cookies.txt（Netscape 全文）+ csdn_cookies_oneline.txt（Secret 用的单行版）
 ```
 
-### 3. 运行
+#### 3. 运行
 
 ```bash
 ./target/release/free-renew                        # 读 ./config.toml
@@ -107,7 +121,7 @@ cargo run --release --bin csdn_cookie_export
 ./target/release/free-renew --test-notify          # 只测通知链路（发一条到微信），不碰云厂商
 ```
 
-### 4. GitHub Actions 部署（推荐）
+#### 4. GitHub Actions 部署
 
 1. Fork 本仓库或推到你的**私有仓库**
 2. 配置仓库 Secrets（与 config.toml 对应的环境变量，优先级高于文件）：
