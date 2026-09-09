@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "Auto renewal for abeiyun/sanfengyun free servers"
 license = "Apache-2.0"
+authors = ["yangshu114514"]
+repository = "https://github.com/yangshu114514/free-renew"
 
 [dependencies]
 reqwest = { version = "0.12", features = ["blocking", "multipart", "cookies", "json", "gzip"] }

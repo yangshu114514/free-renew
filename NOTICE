@@ -1,0 +1,38 @@
+free-renew
+Copyright 2026 yangshu114514
+
+This product includes software and documentation developed as part of the
+free-renew project (https://github.com/yangshu114514/free-renew), licensed
+under the Apache License, Version 2.0.
+
+---
+
+This project is an independent Rust implementation inspired by, and informed
+by protocol knowledge documented by, the following prior work:
+
+  BookerLiu/FreeServer
+  https://github.com/BookerLiu/FreeServer
+  Licensed under the Apache License, Version 2.0.
+  Copyright the original author(s) per that repository.
+
+  The "cmd=" form protocol spoken by api.sanfengyun.com and
+  api.abeiyun.com (login.php / renew.php and their command names) was
+  originally documented by that project in 2020 and independently
+  re-verified against the live services in 2026 (see docs/protocol/).
+  No source code from FreeServer is included in this repository.
+
+---
+
+The CSDN x-ca signing constants (x-ca-key: 203803574 and the appSecret
+9znpamsyl2c7cdrr9sas0le9vbc3r6ba) are public constants embedded in CSDN's
+own web frontend, as documented in community articles (e.g.
+https://cloud.tencent.com/developer/article/2420128) and verified against
+CSDN's editor bundle in 2026.
+
+---
+
+This product is not affiliated with, endorsed by, or sponsored by
+阿贝云 (Abeiyun), 三丰云 (Sanfengyun), CSDN, or GitHub.
+All third-party trademarks belong to their respective owners.
+
+See README.md ("免责声明 / Disclaimer") for the full terms of use.
