@@ -138,7 +138,11 @@ fn markdown_to_simple_html(md: &str) -> String {
             if in_code {
                 out.push_str("</pre></code>\n");
             } else {
-                out.push_str(&format!("<pre><code class=\"language-{lang}\">"));
+                // lang 会进 HTML 属性，必须转义（LLM 输出不可信）
+                out.push_str(&format!(
+                    "<pre><code class=\"language-{}\">",
+                    html_escape(lang)
+                ));
             }
             in_code = !in_code;
             continue;
