@@ -125,6 +125,18 @@ cargo run --release --bin csdn_cookie_export
 
 配置优先级：**环境变量 > config.toml > 内置默认值**。Actions 场景全部走 Secrets，本地开发走文件，同一套代码两种喂法。
 
+> 📖 **完整安装指南与日常运维手册**（含一键 Secrets 配置、OpenClaw 微信通知接线、Cookie 过期维护 30 秒方案、故障速查表）见 **[docs/SETUP.md](docs/SETUP.md)**。
+
+## Cookie 过期维护（全系统唯一周期性人工任务）
+
+CSDN Cookie 实测寿命数月。过期后发文失败 → 微信立刻通知你 → 处置只要 30 秒：
+
+```powershell
+.\scripts\refresh-csdn-cookie.ps1
+```
+
+专用浏览器 profile 里登录态通常还活着，脚本直接重新导出 → 按 `y` 直传 GitHub Secret → 完事。真过期了才需要重新扫码（脚本会自动等）。设计哲学：**失败不静默**——通知链保证你永远不需要"偶尔想起来才去检查"。
+
 ## 项目结构
 
 ```

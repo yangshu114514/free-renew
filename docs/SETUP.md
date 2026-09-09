@@ -1,0 +1,123 @@
+# 安装指南（一键部署 free-renew）
+
+> 目标：从零开始，10 分钟内让两台免费服务器进入"自动续期、出事微信喊你"状态。
+
+## 前置条件
+
+| 需要 | 说明 | 检查命令 |
+|---|---|---|
+| Rust 工具链 | 只在开发机需要；纯部署可跳过（见 §3 用 Actions 远程构建） | `cargo --version` |
+| Git | 已登录（https 方式需 credential manager，ssh 需 key） | `git --version` |
+| GitHub CLI（可选） | 直传 Secrets 用；没有就手动网页配置 | `gh auth status` |
+| 云账号 | 阿贝云 / 三丰云 控制台账密 | — |
+| CSDN 账号 | 已开通博客功能（新号先去 blog.csdn.net 完成开通） | — |
+| LLM API | 任何 OpenAI 兼容接口（base_url + key + model） | — |
+
+## 一键安装流程
+
+### 第 1 步：Fork + Clone
+
+```bash
+# GitHub 网页上 Fork 本仓库到你名下（保持 Private！ Secrets 里有凭据）
+git clone https://github.com/<你的用户名>/free-renew.git
+cd free-renew
+```
+
+### 第 2 步：本地构建（可选，用于本地测试）
+
+```bash
+cargo build --release
+./target/release/free-renew --help
+```
+
+### 第 3 步：填 Secrets
+
+**方式 A：gh CLI（推荐）**
+
+```bash
+# 云账号（每家一条命令）
+gh secret set SANFENGYUN_USERNAME --body "你的手机号"
+gh secret set SANFENGYUN_PASSWORD --body "你的密码"
+gh secret set ABEIYUN_USERNAME --body "你的手机号"
+gh secret set ABEIYUN_PASSWORD --body "你的密码"
+
+# LLM
+gh secret set LLM_BASE_URL --body "https://api.example.com/v1"
+gh secret set LLM_API_KEY --body "sk-..."
+gh secret set LLM_MODEL --body "模型名"
+
+# CSDN Cookie：用刷新脚本产出，见第 4 步；或手动：
+gh secret set CSDN_COOKIES --body "UserName=xxx; UserToken=xxx; ..."
+```
+
+**方式 B：网页** → 仓库 Settings → Secrets and variables → Actions → New repository secret，逐条添加（字段对照见 config.example.toml 注释）。
+
+### 第 4 步：采集 CSDN Cookie
+
+```powershell
+# Windows（推荐，专用 profile 保登录态，日常刷新零操作）
+.\scripts\refresh-csdn-cookie.ps1
+# 弹出浏览器 → 扫码登录 → 脚本自动导出 → 问你是否直传 Secret，按 y
+```
+
+Linux/macOS：`cargo run --release --bin csdn_cookie_export`（功能相同）。
+
+### 第 5 步：通知（可选但强烈建议）
+
+没有通知 = 出了事你不知道。两种接法：
+
+- **OpenClaw 用户**：参考下方"OpenClaw 网关通知"一节配置，微信直收
+- **其他**：任意能收 POST JSON 的 webhook（Server酱、企业微信机器人、Bark…），
+  填 `NOTIFY_WEBHOOK_URL`
+
+### 第 6 步：点火验证
+
+仓库 Actions 页 → 选 free-server-renewal → Run workflow。
+第一次跑 = Linux 编译（~4 分钟）+ 真实登录查状态。绿了就完事，之后每天 09:30（北京时间）自动检查。
+
+## OpenClaw 网关通知（微信直收）
+
+要求：有一个跑着 OpenClaw 的服务器 + Cloudflare 隧道 + lighttpd/nginx 反代。
+
+1. 网关 `openclaw.json` 开启：
+   ```json
+   "gateway": { "http": { "endpoints": { "chatCompletions": { "enabled": true } } } }
+   ```
+2. 反代给 `/v1/` 路径配 basic auth（htpasswd 加专用 bot 用户，别用你本人的）
+3. 给 agent 发消息拿微信 target：
+   > "用 message 工具给微信发一条测试消息，告诉我你用的完整 target"
+   > （形状 `xxxx@im.wechat`，**裸 ID，无 user: 前缀**——加前缀会 ret=-3）
+4. Secrets 填三个：
+   ```bash
+   gh secret set NOTIFY_OPENCLAW_URL      --body "https://你的域名/v1/chat/completions"
+   gh secret set NOTIFY_OPENCLAW_USER     --body "bot用户名"
+   gh secret set NOTIFY_OPENCLAW_PASSWORD --body "bot密码"
+   ```
+5. 验证：本地配好 config.toml 后跑 `./target/release/free-renew --test-notify`
+
+## Cookie 过期维护（唯一周期性人工任务）
+
+**症状**：微信收到"CSDN 发文失败"通知，JSONL 日志里是 401/登录跳转。
+
+**处置（30 秒）**：再跑一遍 `.\scripts\refresh-csdn-cookie.ps1`。专用 profile 里登录态通常还活着，脚本直接重新导出 → 按 y 直传 Secret → 完事。如果 profile 也过期了才需要重新扫码。
+
+**预防**：CSDN Cookie 实测寿命数月。可以在日历上设个 2 个月提醒，或者干脆等通知来了再处理（反正失败当天就有微信提醒，不会静默丢）。
+
+## 日常运维速查
+
+| 症状 | 原因 | 处置 |
+|---|---|---|
+| Actions 红叉，微信没消息 | 通知后端挂了/没配 | 查 run-logs artifact 里的 JSONL；修通知后重跑 |
+| 微信"发文失败" | CSDN Cookie 过期 | §Cookie 过期维护 |
+| 微信"续期提交被拒" | 厂商审核拒绝（可能内容撞车/账号风控） | 看 JSONL 里 `raw` 字段的厂商原话；改 [ai].angles 换角度池 |
+| 微信"提交异常 ret=-3"之类 | 通知指令问题 | 重跑 --test-notify；核对 target 规则 |
+| 连续多天红叉 | 可能厂商改协议 | 提 issue / 对照 docs/protocol/ 手动复查端点 |
+| 两台都到期但都成功 | 正常 | 每家 5 天窗口，run 里显示下次到期时间 |
+
+## 安全清单（公开仓库部署者必读）
+
+1. **永远保持 Fork 出来的仓库为 Private**——Secrets 虽然加密，但 Actions 日志可能包含厂商返回的账号信息
+2. 云账号密码建议专用，不要和你其他账号复用
+3. CSDN 账号同理；被风控了损失的是小号
+4. 定期轮换密码（本仓库作者自己也是这么规划的）
+5. LLM key 建议设余额上限
