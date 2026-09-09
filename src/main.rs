@@ -244,14 +244,22 @@ fn main() -> Result<()> {
 
     let cfg = AppConfig::load(config_path.as_deref());
 
-    // --test-notify 子命令：端到端验证通知链路（正式格式）
+    // --test-notify 子命令：端到端验证通知链路（正式格式）。
+    // 在云账号检查之前执行：本子命令只需要通知配置，不碰云厂商 API。
     if std::env::args().any(|a| a == "--test-notify") {
+        if cfg.notify.openclaw.is_none() && cfg.notify.webhook_url.is_empty() {
+            run.event("test_notify", "failed", json!({"reason": "no_notify_backend"}));
+            anyhow::bail!("通知链路未配置（config.toml [notify.openclaw] 或 [notify].webhook_url）");
+        }
         let title = "free-renew 通知链路自检";
         let detail = format!(
             "通知后端: {}\n本轮为人工触发测试，非真实续期。你看到这条消息说明: Actions → 网关 → agent → 微信 全链路可用。",
             if cfg.notify.openclaw.is_some() { "openclaw(网关agent→微信)" } else { "webhook" }
         );
         notify::send(&cfg.notify, title, &detail);
+        run.event("test_notify", "ok", json!({
+            "backend": if cfg.notify.openclaw.is_some() { "openclaw" } else { "webhook" },
+        }));
         println!("通知已投递（fire-and-forget），查微信。");
         return Ok(());
     }
@@ -268,7 +276,9 @@ fn main() -> Result<()> {
         "llm_model": cfg.llm.as_ref().map(|l| l.model.clone()),
         "provider": cfg.platform_provider.clone(),
         "csdn_ready": cfg.csdn.is_some(),
-        "notify_webhook": !cfg.notify.webhook_url.is_empty(),
+        "notify_backend": if cfg.notify.openclaw.is_some() { "openclaw" }
+            else if !cfg.notify.webhook_url.is_empty() { "webhook" }
+            else { "none" },
     }));
 
     let mut failures = 0;

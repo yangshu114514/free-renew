@@ -62,7 +62,9 @@ pub struct PlatformSection {
 pub struct CsdnPlatformConfig {
     /// 单行 k=v; k=v 形态的完整 Cookie（采集器产出）
     pub cookie: String,
+    /// 预留：临时停用 CSDN 平台（当前未接入读取逻辑）
     #[serde(default = "default_true")]
+    #[allow(dead_code)]
     pub enabled: bool,
     #[serde(default = "default_creation_statement")]
     /// CSDN 创作声明：0=无 1=AI辅助 2=整合 3=个人观点。默认 1（诚实声明）。
