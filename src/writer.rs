@@ -173,8 +173,24 @@ pub fn generate_article(llm: &LlmConfig, vendor: &str) -> Result<Article> {
             });
         }
 
-        tracing::warn!("文章不合规（重试中）: {}", problems.join("；"));
-        retry_feedback = vec![text, problems.join("；")];
+        // 每轮失败都保留完整反馈链（最近 3 对），下一轮全部喂回模型自纠
+        retry_feedback.push(text.clone());
+        retry_feedback.push(problems.join("；"));
+        let pairs: Vec<(String, String)> = retry_feedback
+            .chunks(2)
+            .filter_map(|c| match (c.first(), c.get(1)) {
+                (Some(a), Some(b)) => Some((a.clone(), b.clone())),
+                _ => None,
+            })
+            .collect();
+        messages = vec![
+            json!({"role": "system", "content": system_prompt()}),
+            json!({"role": "user", "content": user_prompt(angle, length, vendor, &required, &llm.forbidden_words)}),
+        ];
+        for (prev, pr) in &pairs {
+            messages.push(json!({"role": "assistant", "content": prev}));
+            messages.push(json!({"role": "user", "content": format!("这篇不行，问题：{pr}。重新写一篇，修复以上所有问题。")}));
+        }
     }
 
     bail!("生成文章 {} 次仍不合规，放弃本次（宁缺毋滥，不做垃圾提交）", llm.max_retries)

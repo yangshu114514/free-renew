@@ -8,8 +8,9 @@ on:
 # 防止 GitHub 60 天无 activity 自动停用 scheduled workflow：
 # 最后 commit 满 45 天时由 keepalive-workflow 自动追加一个 no-op commit 保活
 # https://github.com/marketplace/actions/keepalive-workflow
+# 顶层权限收紧为 read；keepalive job 内部单独提权 write
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   keepalive:

@@ -68,7 +68,7 @@ if ($inRepo -and $repo -and $repo -ne $UPSTREAM) {
         if ($LASTEXITCODE -ne 0) { Die "建仓失败" }
         Set-Location ($name.Split("/")[1])
     }
-    $repo = git config --get remote.origin.url -ErrorAction SilentlyContinue
+    $repo = git config --get remote.origin.url 2>$null
     if ($repo -match "github\.com[:/](.+?)(\.git)?$") { $repo = $Matches[1] }
     Ok "仓库就绪: $repo"
 }
@@ -212,13 +212,21 @@ if (Test-Path $wfPath) {
 
 # 首跑
 Write-Host ""
-# 官方规则：fork 出来的仓库 scheduled workflows 默认禁用，必须先 Enable 一次
-if ($repo -ne $UPSTREAM -and (git config --get remote.origin.url) -match "fork") {
-    Write-Host "  检测到 fork 仓库：GitHub 默认禁用 fork 的定时任务，需要启用一次..." -ForegroundColor Yellow
-    $wfId = "free-server-renewal"
-    gh api -X PUT "repos/$repo/actions/workflows/$wfId.yml/enable" 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) { Ok "定时任务已启用" } else {
-        Warn "自动启用失败——请到仓库 Actions 页选中 free-server-renewal 点 Enable workflow"
+# 官方规则：fork 出来的仓库 scheduled workflows 默认禁用，必须先 Enable 一次。
+# 判定：remote url 指向用户名下且 ≠ 上游（gh repo fork 后 remote 无 "fork" 字样，
+# 不能靠字符串匹配，直接用 gh api 查 is_fork 最可靠）。
+if ($repo -and $repo -ne $UPSTREAM) {
+    $isFork = $false
+    try {
+        $info = gh api "repos/$repo" --jq '.fork' 2>$null
+        $isFork = ($info -eq "true")
+    } catch {}
+    if ($isFork) {
+        Write-Host "  检测到 fork 仓库：GitHub 默认禁用 fork 的定时任务，需要启用一次..." -ForegroundColor Yellow
+        gh api -X PUT "repos/$repo/actions/workflows/free-server-renewal.yml/enable" 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { Ok "定时任务已启用" } else {
+            Warn "自动启用失败——请到仓库 Actions 页选中 free-server-renewal 点 Enable workflow"
+        }
     }
 }
 gh workflow run free-server-renewal @repoArg 2>&1 | Out-Null
