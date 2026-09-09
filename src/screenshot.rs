@@ -35,6 +35,11 @@ pub fn capture(url: &str, debug_dir: &Path) -> Result<PathBuf> {
         .context("启动 headless chromium 失败（检查 chrome/chromium 是否安装）")?;
 
     let tab = browser.new_tab().context("打开新标签页失败")?;
+    // 防御：文章 URL 必须来自我们发文平台的域。CSDN 响应若被污染成任意 URL，
+    // 不允许 headless 浏览器去导航（SSRF 面收敛）。
+    if !url.starts_with("https://blog.csdn.net/") {
+        anyhow::bail!("拒绝截图非预期域的文章 URL: {url}");
+    }
     tab.navigate_to(url).context("导航失败")?;
     tab.wait_until_navigated().context("页面加载超时")?;
     // 字体/图片渲染余量
