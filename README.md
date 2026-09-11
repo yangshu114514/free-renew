@@ -46,7 +46,13 @@ CSDN Cookie 过期时（数月一次，微信会提醒你）：
 
 本项目的协议层地基来自 **[BookerLiu/FreeServer](https://github.com/BookerLiu/FreeServer)**（Apache-2.0）——其作者在 2020 年逆向了阿贝云/三丰云的 API 协议，本项目沿用其端点与命令名并在 2026 年复测验证（不含其任何源代码，属独立再实现；归属声明见 [NOTICE](NOTICE)）。FreeServer 2021 年因"模板文章过不了人工审核"停更，本项目用 LLM 生成每篇不同的文章解决了这个死穴。感谢 Demo-Liu 的工作。
 
-CSDN 签名常量出处与完整致谢细节见 [NOTICE](NOTICE)。
+其他直接引用与致谢（完整清单见 [NOTICE](NOTICE)）：
+
+- **[rust-headless-chrome](https://github.com/rust-headless-chrome/rust-headless-chrome)**（MIT）——Chrome DevTools Protocol 客户端。文章页截图的反检测能力（webdriver/chrome/plugins/permissions/webgl 五件套）来自其内置 `enable_stealth_mode()`。
+- **[gautamkrishnar/keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow)**（MIT）——防止 GitHub 60 天无活动自动停用定时任务。
+- **CSDN 签名常量**（x-ca-key / appSecret）出自 CSDN 前端 JS 内嵌的公开常量，社区解析见[腾讯云社区文章](https://cloud.tencent.com/developer/article/2420128)。
+- **三丰云官方帮助文档**（content_1009 / content_1156）——审核红线条目的出处。
+- **NodeLoc / CSDN 社区帖子**——厂商审核失败模式与免费服务器生态的情报来源。
 
 ## License
 
