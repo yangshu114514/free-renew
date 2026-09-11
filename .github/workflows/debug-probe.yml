@@ -61,16 +61,22 @@ jobs:
           echo "DOM size: $(wc -c < /tmp/dom2.html)"
           grep -o "iw(\|403 Forbidden\|article_title\|WAF" /tmp/dom2.html | sort | uniq -c || echo "(no signature)"
 
-      - name: headless chrome probe — new headless + CSDN cookies
-        env:
-          CSDN_COOKIES: ${{ secrets.CSDN_COOKIES }}
+      - name: candidate platforms reachability from Azure runner
         run: |
-          # 把单行 cookie 拆成 CDP 可注入的格式：用 --user-data-dir 预置不现实，
-          # 改用 chrome 的 --headless=new + Network injection 不可行(CLI)，
-          # 这里用带 cookie 的 curl 对照：同 IP 下带登录 cookie 是否放行
-          CODE=$(curl -s -o /tmp/a3.html -w "%{http_code}" -m 20 \
-            -H "Cookie: $CSDN_COOKIES" \
-            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-            https://blog.csdn.net/2503_92868667/article/details/165004650)
-          echo "with-cookies HTTP:$CODE size:$(wc -c < /tmp/a3.html)"
-          grep -o "iw(\|403 Forbidden\|article_title" /tmp/a3.html | sort | uniq -c || true
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          echo "--- V2EX (approved list + official API) ---"
+          curl -s -o /dev/null -w "www:%{http_code} " -m 15 -A "$UA" https://www.v2ex.com/
+          curl -s -o /dev/null -w "api:%{http_code}" -m 15 https://www.v2ex.com/api/topics/hot.json
+          echo ""
+          echo "--- 51CTO blog article page ---"
+          curl -s -o /tmp/51.html -w "%{http_code} size:%{size_download}" -m 15 -A "$UA" https://blog.51cto.com/u_16213340/13240688
+          echo ""
+          echo "--- segmentfault article page ---"
+          curl -s -o /tmp/sf.html -w "%{http_code} size:%{size_download}" -m 15 -A "$UA" https://segmentfault.com/a/1190000041516850
+          echo ""
+          echo "--- zhihu article page (baseline, expect 403) ---"
+          curl -s -o /dev/null -w "%{http_code}" -m 15 -A "$UA" https://zhuanlan.zhihu.com/p/2080768725272245516
+          echo ""
+          echo "--- toutiao ---"
+          curl -s -o /dev/null -w "%{http_code}" -m 15 -A "$UA" https://www.toutiao.com/article/7400000000000000000/
+          echo ""
