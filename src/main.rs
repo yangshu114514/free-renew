@@ -304,15 +304,17 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // --test-screenshot <url>：单独验证截图链路（WAF 挑战 + Cookie 注入 + 标题渲染）
+    // --test-screenshot <url> [title]：单独验证截图链路（WAF 挑战 + Cookie 注入 + 标题渲染）
+    // title 可选：给出则验证页面渲染出了该标题；省略则只防挑战页
     if let Some(pos) = std::env::args().position(|a| a == "--test-screenshot") {
         let url = std::env::args()
             .nth(pos + 1)
             .ok_or_else(|| anyhow::anyhow!("--test-screenshot 需要一个文章 URL 参数"))?;
+        let title = std::env::args().nth(pos + 2).unwrap_or_default();
         let debug_dir = std::path::PathBuf::from(
             std::env::var("FREE_RENEW_DEBUG_DIR").unwrap_or_else(|_| "/tmp/freerenew-debug".into()),
         );
-        let pic = screenshot::capture(&url, "阿贝云", &debug_dir, login_cookie(&cfg))?;
+        let pic = screenshot::capture(&url, &title, &debug_dir, login_cookie(&cfg))?;
         let meta = std::fs::metadata(&pic)?;
         println!("截图成功: {} ({} bytes)", pic.display(), meta.len());
         return Ok(());
