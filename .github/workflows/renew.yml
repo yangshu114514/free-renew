@@ -15,7 +15,10 @@ permissions:
 jobs:
   keepalive:
     # 与续期并行；action 内部自判：最后 commit < 45 天时直接 skip
+    # continue-on-error：保活失败（如 API 限流）不应污染整轮结论——
+    # 红叉必须只表示“续期本身出问题”
     if: ${{ github.event_name == 'schedule' }}
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
