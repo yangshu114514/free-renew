@@ -117,7 +117,7 @@ impl AppConfig {
             std::env::var(k)
                 .ok()
                 // 所有凭据/URL 一律 trim：Secret 注入渠道（管道/网页粘贴）常混入
-                // 尾部换行或空白，Agnes 实测会对带 \n 的 Bearer 报“未提供令牌”
+                // 尾部换行或空白，LLM 供应商实测会对带 \n 的 Bearer 报“未提供令牌”
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty())
         };
@@ -222,12 +222,32 @@ impl AppConfig {
 
         // ---- 通知 ----
         let notify_file = file.as_ref().map(|f| f.notify.clone()).unwrap_or_default();
-        let openclaw = notify_file.openclaw.map(|o| OpenClawNotify {
-            url: env("NOTIFY_OPENCLAW_URL").unwrap_or(o.url),
-            basic_user: env("NOTIFY_OPENCLAW_USER").unwrap_or(o.basic_user),
-            basic_password: env("NOTIFY_OPENCLAW_PASSWORD").unwrap_or(o.basic_password),
-            model: env("NOTIFY_OPENCLAW_MODEL").unwrap_or(o.model),
-        });
+        // OpenClaw 后端：文件段与 NOTIFY_OPENCLAW_* 环境变量二选一即可。
+        // 环境变量路径必须独立成立——GitHub Actions 部署没有 config.toml，
+        // 三个 Secrets（URL/USER/PASSWORD）齐全时必须能直接启用后端。
+        let openclaw = match notify_file.openclaw {
+            Some(o) => Some(OpenClawNotify {
+                url: env("NOTIFY_OPENCLAW_URL").unwrap_or(o.url),
+                basic_user: env("NOTIFY_OPENCLAW_USER").unwrap_or(o.basic_user),
+                basic_password: env("NOTIFY_OPENCLAW_PASSWORD").unwrap_or(o.basic_password),
+                model: env("NOTIFY_OPENCLAW_MODEL").unwrap_or(o.model),
+            }),
+            None => {
+                match (
+                    env("NOTIFY_OPENCLAW_URL"),
+                    env("NOTIFY_OPENCLAW_USER"),
+                    env("NOTIFY_OPENCLAW_PASSWORD"),
+                ) {
+                    (Some(url), Some(user), Some(pass)) => Some(OpenClawNotify {
+                        url,
+                        basic_user: user,
+                        basic_password: pass,
+                        model: env("NOTIFY_OPENCLAW_MODEL").unwrap_or_else(|| "openclaw".into()),
+                    }),
+                    _ => None,
+                }
+            }
+        };
         let notify = NotifyConfig {
             webhook_url: env("NOTIFY_WEBHOOK_URL").unwrap_or(notify_file.webhook_url),
             tag: notify_file.tag,
