@@ -31,6 +31,23 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    env:
+      # job 级 env：preflight 诊断与 renew 共用同一套 Secrets
+      SANFENGYUN_USERNAME: ${{ secrets.SANFENGYUN_USERNAME }}
+      SANFENGYUN_PASSWORD: ${{ secrets.SANFENGYUN_PASSWORD }}
+      ABEIYUN_USERNAME: ${{ secrets.ABEIYUN_USERNAME }}
+      ABEIYUN_PASSWORD: ${{ secrets.ABEIYUN_PASSWORD }}
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL }}
+      PLATFORM_PROVIDER: csdn
+      CSDN_COOKIES: ${{ secrets.CSDN_COOKIES }}
+      NOTIFY_OPENCLAW_URL: ${{ secrets.NOTIFY_OPENCLAW_URL }}
+      NOTIFY_OPENCLAW_USER: ${{ secrets.NOTIFY_OPENCLAW_USER }}
+      NOTIFY_OPENCLAW_PASSWORD: ${{ secrets.NOTIFY_OPENCLAW_PASSWORD }}
+      CHROME_PATH: /usr/bin/google-chrome
+      FREE_RENEW_DEBUG_DIR: /tmp/freerenew-debug
+      FREE_RENEW_LOG_DIR: /tmp/freerenew-logs
     steps:
       - uses: actions/checkout@v4
 
@@ -57,29 +74,6 @@ jobs:
           head -c 300 /tmp/llm.json || true
 
       - name: Run renewal
-        env:
-          # 云账号（环境变量优先级高于 config.toml）
-          SANFENGYUN_USERNAME: ${{ secrets.SANFENGYUN_USERNAME }}
-          SANFENGYUN_PASSWORD: ${{ secrets.SANFENGYUN_PASSWORD }}
-          ABEIYUN_USERNAME: ${{ secrets.ABEIYUN_USERNAME }}
-          ABEIYUN_PASSWORD: ${{ secrets.ABEIYUN_PASSWORD }}
-          # LLM（OpenAI 兼容）
-          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_MODEL: ${{ secrets.LLM_MODEL }}
-          # 发文平台
-          PLATFORM_PROVIDER: csdn
-          CSDN_COOKIES: ${{ secrets.CSDN_COOKIES }}
-          # 失败/成功通知（OpenClaw 后端：网关 agent → 微信）
-          NOTIFY_OPENCLAW_URL: ${{ secrets.NOTIFY_OPENCLAW_URL }}
-          NOTIFY_OPENCLAW_USER: ${{ secrets.NOTIFY_OPENCLAW_USER }}
-          NOTIFY_OPENCLAW_PASSWORD: ${{ secrets.NOTIFY_OPENCLAW_PASSWORD }}
-          # headless chrome
-          CHROME_PATH: /usr/bin/google-chrome
-          # 失败诊断产物目录（artifact 上传用）
-          FREE_RENEW_DEBUG_DIR: /tmp/freerenew-debug
-          # JSONL 运行日志目录（每次 run 都上传，方便回溯）
-          FREE_RENEW_LOG_DIR: /tmp/freerenew-logs
         run: ./target/release/free-renew
 
       - name: Upload run logs
