@@ -71,7 +71,6 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
     }));
 
     match state {
-    match state {
         RenewState::CanRenew => {
             run.event(step("decision").as_str(), "will_renew", json!({"vendor": vendor}));
             // 交叉核对：状态接口的 delay_state 是参考字段，最近一次延期记录
