@@ -43,6 +43,12 @@ Architecture in one sentence: **GitHub Actions runs this repo's Rust binary dail
 
 The protocol layer stands on **[BookerLiu/FreeServer](https://github.com/BookerLiu/FreeServer)** (Apache-2.0) — its author reverse-engineered the vendors' API in 2020; this project reuses the endpoints and command names, re-verified in 2026 (no source code copied; see [NOTICE](NOTICE) for the attribution statement). FreeServer stopped maintenance in 2021 because template articles no longer passed human review — this project's core improvement is LLM-generated unique articles. Thanks to Demo-Liu.
 
+
+Other direct credits (full list in NOTICE):
+
+- **[rust-headless-chrome](https://github.com/rust-headless-chrome/rust-headless-chrome)** (MIT) - CDP client; the screenshot anti-detection capability (webdriver/chrome/plugins/permissions/webgl bypass) comes from its built-in enable_stealth_mode().
+- **[gautamkrishnar/keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow)** (MIT) - prevents GitHub's 60-day auto-disable of scheduled workflows.
+- CSDN x-ca signing constants: public constants embedded in CSDN's own frontend JS, as documented in community articles.
 ## License
 
 [Apache-2.0](LICENSE) · © 2026 yangshu114514 · third-party attribution in [NOTICE](NOTICE)
@@ -55,3 +61,5 @@ The protocol layer stands on **[BookerLiu/FreeServer](https://github.com/BookerL
 4. No user credentials are stored, uploaded, or collected by this project; all configuration lives in your local files or private repo Secrets.
 5. Free-server stability is decided by the vendors; NO warranty of data safety. **Always keep off-site backups.**
 6. Provided "as is" under Apache-2.0. Continued use constitutes agreement with all of the above.
+
+

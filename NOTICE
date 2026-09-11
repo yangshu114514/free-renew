@@ -1,38 +1,73 @@
-free-renew
-Copyright 2026 yangshu114514
+Third-party software and assets used by free-renew
+===================================================
 
-This product includes software and documentation developed as part of the
-free-renew project (https://github.com/yangshu114514/free-renew), licensed
-under the Apache License, Version 2.0.
+This project (free-renew, https://github.com/yangshu114514/free-renew)
+builds upon the following third-party works. Each is used under the terms
+of its own license; this file summarizes attributions required by those
+licenses and by fair-practice conventions.
 
----
+----------------------------------------------------------------------------
+1. BookerLiu/FreeServer
+----------------------------------------------------------------------------
+  Source:    https://github.com/BookerLiu/FreeServer
+  License:   Apache License 2.0
+  Use:       Protocol knowledge. The "cmd=" form protocol spoken by
+             api.sanfengyun.com and api.abeiyun.com (login.php / renew.php,
+             the check_free_delay / free_delay_list / free_delay_add command
+             family, the ptype and yanqi_img field names) was originally
+             documented by FreeServer in 2020 and re-verified against the
+             live services in 2026.
 
-This project is an independent Rust implementation inspired by, and informed
-by protocol knowledge documented by, the following prior work:
+  Statement: This project is an independent reimplementation in Rust.
+             No source code from FreeServer is included or copied.
+             Per Apache-2.0 Section 4, this file serves as the
+             attribution notice for that project's protocol documentation.
 
-  BookerLiu/FreeServer
-  https://github.com/BookerLiu/FreeServer
-  Licensed under the Apache License, Version 2.0.
-  Copyright the original author(s) per that repository.
+----------------------------------------------------------------------------
+2. rust-headless-chrome (headless_chrome crate)
+----------------------------------------------------------------------------
+  Source:    https://github.com/rust-headless-chrome/rust-headless-chrome
+  License:   MIT
+  Use:       Direct dependency (Chrome DevTools Protocol client). Used for
+             the article-page screenshot and its bundled stealth-mode
+             bypasses (webdriver/chrome-runtime/plugins/permissions/webgl),
+             which this project enables via tab.enable_stealth_mode().
+  Note:     Attribution per MIT Section 2 (copyright + permission notice
+             retention is satisfied by this file and LICENSE).
 
-  The "cmd=" form protocol spoken by api.sanfengyun.com and
-  api.abeiyun.com (login.php / renew.php and their command names) was
-  originally documented by that project in 2020 and independently
-  re-verified against the live services in 2026 (see docs/protocol/).
-  No source code from FreeServer is included in this repository.
+----------------------------------------------------------------------------
+3. gautamkrishnar/keepalive-workflow (GitHub Action)
+----------------------------------------------------------------------------
+  Source:    https://github.com/marketplace/actions/keepalive-workflow
+  License:   MIT
+  Use:       GitHub Actions workflow step (.github/workflows/renew.yml).
+             Prevents GitHub's 60-day auto-disable of scheduled workflows
+             by appending a no-op commit when the repository is inactive.
 
----
+----------------------------------------------------------------------------
+4. CSDN x-ca signing constants (public frontend constants)
+----------------------------------------------------------------------------
+  Source:    CSDN web editor bundle; documented in the community at
+             https://cloud.tencent.com/developer/article/2420128
+  Use:       x-ca-key (203803574) and the appSecret
+             (9znpamsyl2c7cdrr9sas0le9vbc3r6ba) are public constants
+             embedded in CSDN's own web frontend. Referenced as protocol
+             constants, not creative work.
 
-The CSDN x-ca signing constants (x-ca-key: 203803574 and the appSecret
-9znpamsyl2c7cdrr9sas0le9vbc3r6ba) are public constants embedded in CSDN's
-own web frontend, as documented in community articles (e.g.
-https://cloud.tencent.com/developer/article/2420128) and verified against
-CSDN's editor bundle in 2026.
+----------------------------------------------------------------------------
+5. Informational references (no code or content copied)
+----------------------------------------------------------------------------
+  - frostming/fxzhihu (MIT): reference for the feasibility of zhihu's
+    x-zse-96 request signing. Not yet used in this project.
+  - NodeLoc community thread and CSDN blog posts: vendor review rules
+    and failure-mode reports for the free-server programs.
+  - Sanfengyun official help documents (content_1009 / content_1156):
+    review red lines quoted in docs/ and encoded in the article validator.
 
----
-
-This product is not affiliated with, endorsed by, or sponsored by
-阿贝云 (Abeiyun), 三丰云 (Sanfengyun), CSDN, or GitHub.
-All third-party trademarks belong to their respective owners.
-
-See README.md ("免责声明 / Disclaimer") for the full terms of use.
+----------------------------------------------------------------------------
+No affiliation
+----------------------------------------------------------------------------
+This project is not affiliated with, endorsed by, or sponsored by
+阿贝云 (Abeiyun), 三丰云 (Sanfengyun), CSDN, V2EX, 51CTO, SegmentFault,
+知乎 (Zhihu), 今日头条 (Toutiao), or GitHub. All third-party trademarks
+belong to their respective owners.
