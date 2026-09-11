@@ -257,7 +257,10 @@ fn main() -> Result<()> {
     if std::env::args().any(|a| a == "--test-notify") {
         if cfg.notify.openclaw.is_none() && cfg.notify.webhook_url.is_empty() {
             run.event("test_notify", "failed", json!({"reason": "no_notify_backend"}));
-            anyhow::bail!("通知链路未配置（config.toml [notify.openclaw] 或 [notify].webhook_url）");
+            anyhow::bail!(
+                "通知链路未配置。二选一：环境变量 NOTIFY_OPENCLAW_URL/USER/PASSWORD 三件套（或 NOTIFY_WEBHOOK_URL），\
+                 或 config.toml 的 [notify.openclaw] / [notify].webhook_url"
+            );
         }
         let title = "free-renew 通知链路自检";
         let backend_label = if cfg.notify.openclaw.is_some() {
