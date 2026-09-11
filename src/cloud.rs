@@ -79,7 +79,7 @@ impl CloudClient {
 
     /// 对每个候选端点现构请求体（multipart 的 Form 不可 Clone，不能 build 一次再 clone）。
     /// 外层带重试：Actions(Azure) → 中国 IDC 的线路抖动率很高，一次失败不能定生死。
-    /// 总尝试 = 2 轮 × 候选端点数，轮间隔 5s/15s。
+    /// 总尝试 = 3 轮（间隔 0s/5s/15s）× 候选端点数。
     fn post_with<F>(&self, url: &str, build: F) -> Result<String>
     where
         F: Fn(&str) -> reqwest::blocking::RequestBuilder,
@@ -130,7 +130,8 @@ impl CloudClient {
             .context("登录请求失败")?;
 
         if !resp_body.contains("登录成功") && !resp_body.contains("登陆成功") {
-            anyhow::bail!("登录失败: {resp_body}");
+            // 响应体可能是整页 WAF HTML，截断防日志爆量
+            anyhow::bail!("登录失败: {}", crate::http::truncate_chars(&resp_body, 300));
         }
         self.logged_in = true;
         tracing::debug!("登录成功");
@@ -152,7 +153,7 @@ impl CloudClient {
         let data: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
         let inner = data.get("msg").cloned().unwrap_or(Value::Null);
         if !inner.is_object() {
-            anyhow::bail!("状态接口异常: {body}");
+            anyhow::bail!("状态接口异常: {}", crate::http::truncate_chars(&body, 300));
         }
         let (state, extra) = parse_state(self.account.profile.key, &inner);
         Ok((state, extra))
@@ -234,14 +235,19 @@ fn parse_state(vendor_key: &str, inner: &Value) -> (RenewState, String) {
     let state_raw = field_str(inner, "delay_state").unwrap_or_default();
     let next_time = field_str(inner, "next_time").unwrap_or_default();
 
+    // 审核态判断放最前：无论 delay_enable 形状怎么漂移，
+    // 只要有中文状态字就绝不提交（宁可跳过，不可重复提交）
+    if state_raw.contains("审核") {
+        return (RenewState::UnderReview, state_raw);
+    }
+
     let state = match vendor_key {
         "sanfengyun" => match (enable.as_deref(), state_raw.as_str()) {
             (Some("1"), _) => RenewState::CanRenew,
             (Some("0"), _) => RenewState::Waiting,
+            // 兜底：形状漂移（delay_enable 缺失）时看 delay_state 的数字形态
             (_, "1") => RenewState::CanRenew,
             (_, "0") => RenewState::Waiting,
-            // 中文状态字（"审核中"等）只在这家出现
-            (_, s) if s.contains("审核") => RenewState::UnderReview,
             _ => RenewState::Unknown,
         },
         "abeiyun" => match enable.as_deref() {
@@ -251,7 +257,6 @@ fn parse_state(vendor_key: &str, inner: &Value) -> (RenewState, String) {
             _ => match state_raw.as_str() {
                 "1" => RenewState::CanRenew,
                 "0" => RenewState::Waiting,
-                s if s.contains("审核") => RenewState::UnderReview,
                 _ => RenewState::Unknown,
             },
         },

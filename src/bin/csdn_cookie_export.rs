@@ -105,7 +105,7 @@ fn main() -> Result<()> {
     println!("[采集器] 关键 Cookie 检查：");
     for key in ["UserName", "UserToken", "UN", "p_uid"] {
         match cookies.iter().find(|c| c.name == key) {
-            Some(c) => println!("  ✅ {key} = {}…", &c.value[..c.value.len().min(10)]),
+            Some(c) => println!("  ✅ {key} = {}…", c.value.chars().take(10).collect::<String>()),
             None => println!("  ❌ {key} 缺失（可能影响发文接口）"),
         }
     }

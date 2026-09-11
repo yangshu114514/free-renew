@@ -10,11 +10,14 @@
 
 use anyhow::{bail, Context, Result};
 
-/// 判断 HTML 是否为 521 挑战页（而非真页面/403 硬拒页）
+/// 判断 HTML 是否为 521 挑战页（而非真页面/403 硬拒页）。
+/// 供裸 HTTP 探测与 Chrome DOM 内容共用：签名是强特征，阈值放宽防
+/// DOM 注入内容干扰判断（正常文章页 100KB+，挑战页 ~2KB）。
 pub fn is_challenge(html: &str) -> bool {
-    // 挑战页特征：体积小 + 混淆数组 + onload 定时器模式
-    html.len() < 5000
-        && (html.contains("window.onload=setTimeout") || html.contains("acw_sc__v2"))
+    html.len() < 20_000
+        && (html.contains("acw_sc")
+            || html.contains("window.onload=setTimeout")
+            || html.contains("iw("))
 }
 
 /// 403 bot-score 硬拒页特征（带 captcha 脚本引用）
@@ -51,9 +54,9 @@ console.error('scripts executed: ' + executed);
 
 /// 求解挑战页，返回 "name=value; ..." 形态的 Cookie 串。
 pub fn solve(challenge_html: &str) -> Result<String> {
-    let tmp = std::env::temp_dir();
-    let challenge_path = tmp.join("freerenew_challenge.html");
-    let solver_path = tmp.join("freerenew_solver.js");
+    // 临时文件名带 pid：共享 /tmp 上避免多实例互踩
+    let challenge_path = std::env::temp_dir().join(format!("freerenew_challenge_{}.html", std::process::id()));
+    let solver_path = std::env::temp_dir().join(format!("freerenew_solver_{}.js", std::process::id()));
     std::fs::write(&challenge_path, challenge_html).context("写挑战页临时文件失败")?;
     std::fs::write(&solver_path, NODE_SOLVER).context("写求解器临时文件失败")?;
 
@@ -85,24 +88,6 @@ pub fn solve(challenge_html: &str) -> Result<String> {
     Ok(pairs.join("; "))
 }
 
-#[allow(dead_code)]
-fn extract_script(html: &str) -> Option<String> {
-    // 挑战脚本 = 含混淆数组特征的最大 script 块
-    let mut best: Option<&str> = None;
-    let mut rest = html;
-    while let Some(start) = rest.find("<script") {
-        let after = &rest[start..];
-        let open_end = after.find('>')?;
-        let close = after[open_end..].find("</script>")? + open_end;
-        let body = &after[open_end + 1..close];
-        if body.contains("oo=") || body.contains("document.cookie") || body.len() > 500 {
-            best = Some(body);
-        }
-        rest = &after[close..];
-    }
-    best.map(str::to_string)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,13 +101,6 @@ mod tests {
         let hard = r#"<html><head><title>403 Forbidden</title><script src="/cdn_cgi_bs_bot/static/bot-score-v1.js"></script></head><body><center><h1>403 Forbidden</h1></center><hr><center>WAF</center></body></html>"#;
         assert!(is_hard_block(hard));
         assert!(!is_challenge(hard));
-    }
-
-    #[test]
-    fn extracts_largest_script() {
-        let html = r#"<html><script src="x.js"></script><body><script>var oo=[1,2];document.cookie="a=b";</script></body></html>"#;
-        let s = extract_script(html).unwrap();
-        assert!(s.contains("var oo"));
     }
 }
 

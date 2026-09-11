@@ -113,7 +113,7 @@ pub struct NotifySection {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct OpenClawNotifyConfig {
-    /// 网关 chatCompletions 公网地址（如 https://REDACTED_GATEWAY_DOMAIN/v1/chat/completions）
+    /// 网关 chatCompletions 公网地址（如 https://<你的域名或IP:端口>/v1/chat/completions）
     pub url: String,
     pub basic_user: String,
     pub basic_password: String,
