@@ -15,6 +15,7 @@ mod http;
 mod logging;
 mod notify;
 mod screenshot;
+mod waf;
 mod writer;
 
 use anyhow::Result;
@@ -312,4 +313,5 @@ fn main() -> Result<()> {
     tracing::info!("=== free-renew 结束，耗时 {} 秒 ===", run.elapsed_secs());
     Ok(())
 }
+
 
