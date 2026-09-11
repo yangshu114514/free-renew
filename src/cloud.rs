@@ -119,14 +119,14 @@ impl CloudClient {
 
     /// 登录并立刻查询免费服务器延期状态。返回 (状态, next_time 或说明)。
     pub fn login_and_check(&mut self) -> Result<(RenewState, String)> {
-        let login_url = self.account.profile.login_url;
+        let login_url = self.account.login_url.clone();
         let form = [
             ("cmd", "login"),
             ("id_mobile", self.account.username.as_str()),
             ("password", self.account.password.as_str()),
         ];
         let resp_body = self
-            .post_with(login_url, |u| self.http.post(u).form(&form))
+            .post_with(&login_url, |u| self.http.post(u).form(&form))
             .context("登录请求失败")?;
 
         if !resp_body.contains("登录成功") && !resp_body.contains("登陆成功") {
@@ -142,9 +142,9 @@ impl CloudClient {
         if !self.logged_in {
             anyhow::bail!("请先 login_and_check()");
         }
-        let url = self.account.profile.renew_url;
+        let url = self.account.renew_url.clone();
         let body = self
-            .post_with(url, |u| {
+            .post_with(&url, |u| {
                 self.http.post(u).form(&[("cmd", "check_free_delay"), ("ptype", "vps")])
             })
             .context("状态查询失败")?;
@@ -165,10 +165,10 @@ impl CloudClient {
             anyhow::bail!("请先 login_and_check()");
         }
         let img_bytes = std::fs::read(screenshot).context("读取截图文件失败")?;
-        let url = self.account.profile.renew_url;
+        let url = self.account.renew_url.clone();
 
         let body = self
-            .post_with(url, |u| {
+            .post_with(&url, |u| {
                 // 每次迭代现构 Form（Part 不可 Clone）
                 let part = multipart_part(&img_bytes);
                 let form = reqwest::blocking::multipart::Form::new()
@@ -189,9 +189,9 @@ impl CloudClient {
     /// 延期记录列表（审核状态查询，只读）。日常流程不调用，供手动诊断。
     #[allow(dead_code)]
     pub fn review_history(&self) -> Result<Value> {
-        let url = self.account.profile.renew_url;
+        let url = self.account.renew_url.clone();
         let body = self
-            .post_with(url, |u| {
+            .post_with(&url, |u| {
                 self.http.post(u).form(&[
                     ("cmd", "free_delay_list"),
                     ("ptype", "vps"),
