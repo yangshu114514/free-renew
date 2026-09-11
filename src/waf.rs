@@ -51,7 +51,6 @@ console.error('scripts executed: ' + executed);
 
 /// 求解挑战页，返回 "name=value; ..." 形态的 Cookie 串。
 pub fn solve(challenge_html: &str) -> Result<String> {
-    let script = extract_script(challenge_html).context("挑战页中未找到脚本")?;
     let tmp = std::env::temp_dir();
     let challenge_path = tmp.join("freerenew_challenge.html");
     let solver_path = tmp.join("freerenew_solver.js");
@@ -86,6 +85,7 @@ pub fn solve(challenge_html: &str) -> Result<String> {
     Ok(pairs.join("; "))
 }
 
+#[allow(dead_code)]
 fn extract_script(html: &str) -> Option<String> {
     // 挑战脚本 = 含混淆数组特征的最大 script 块
     let mut best: Option<&str> = None;
@@ -125,3 +125,5 @@ mod tests {
         assert!(s.contains("var oo"));
     }
 }
+
+
