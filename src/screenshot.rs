@@ -5,6 +5,7 @@
 //! 因此"页面就绪"判断必须在 Chrome 内做，裸 HTTP 检查只能参考不能定生死。
 
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 
 use anyhow::{bail, Context, Result};
 
@@ -16,6 +17,24 @@ fn looks_like_challenge(html: &str) -> bool {
         return false;
     }
     CHALLENGE_SIGNATURES.iter().any(|s| html.contains(s))
+}
+
+/// 组装 Cookie 头：CSDN 登录 Cookie + WAF 挑战解出的 acw Cookie（如有）
+fn build_cookie_header(acw: Option<&str>) -> HashMap<String, String> {
+    let mut headers = HashMap::new();
+    let login = std::env::var("CSDN_COOKIES")
+        .map(|v| v.trim().to_string())
+        .unwrap_or_default();
+    let mut merged = String::new();
+    if let Some(a) = acw {
+        merged.push_str(a);
+        merged.push_str("; ");
+    }
+    merged.push_str(&login);
+    if !login.is_empty() {
+        headers.insert("Cookie".into(), merged);
+    }
+    headers
 }
 
 /// 对文章页截图（挑战感知：先过 WAF 挑战再截），返回截图路径。
@@ -47,19 +66,50 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path) -> Result<PathBuf> {
         .context("启动 headless chromium 失败（检查 chrome/chromium 是否安装）")?;
     let tab = browser.new_tab().context("打开新标签页失败")?;
 
-    // 注入 CSDN 登录 Cookie（CSDN_COOKIES 环境变量，单行 k=v; k=v）：
-    // 实测矩阵（2026-09-11）：无 Cookie 的 headless Chrome 从数据中心 IP 访问
-    // 文章页 = 403 bot-score 硬拒；带登录 Cookie = 降级为 521 JS 挑战，而
-    // Chrome 原生执行挑战 JS 种 acw cookie 后放行 → 截图可行
-    if let Ok(ck) = std::env::var("CSDN_COOKIES") {
-        let ck = ck.trim();
-        if !ck.is_empty() {
-            let mut headers = std::collections::HashMap::new();
-            headers.insert("Cookie", ck);
-            tab.set_extra_http_headers(headers)
-                .context("注入 Cookie 头失败")?;
-            tracing::info!("已注入 CSDN 登录 Cookie（len={}）", ck.len());
+    // ── 反检测：crate 内置 stealth 五件套（webdriver/chrome/plugins/permissions/webgl）
+    //    + UA 覆盖（去掉 HeadlessChrome 标记）。bot-score 按浏览器指纹打分，
+    //    不伪装 = 数据中心 IP + headless 指纹 → 直接 403。
+    //    注意：本地网络可能经梯子，探测结果不可作准；Actions 环境才是准数。
+    tab.enable_stealth_mode()
+        .context("注入 stealth 反检测脚本失败")?;
+    tab.set_user_agent(crate::http::BROWSER_UA, Some("zh-CN,zh;q=0.9".into()), Some("Win32".into()))
+        .context("设置 UA 覆盖失败")?;
+    tracing::info!("已启用 stealth 模式 + UA 覆盖");
+
+    // ── WAF 预解：裸请求拿挑战 → Node 沙箱求解 → acw Cookie 注入 Chrome ──
+    let mut acw: Option<String> = None;
+    let probe = reqwest::blocking::Client::new()
+        .get(url)
+        .header("User-Agent", crate::http::BROWSER_UA)
+        .timeout(std::time::Duration::from_secs(30))
+        .send();
+    if let Ok(resp) = probe {
+        if let Ok(body) = resp.text() {
+            if crate::waf::is_challenge(&body) {
+                tracing::info!("命中 WAF 521 挑战，Node 沙箱求解中...");
+                match crate::waf::solve(&body) {
+                    Ok(acw_cookie) => {
+                        tracing::info!("挑战求解成功: {} 字节 Cookie", acw_cookie.len());
+                        acw = Some(acw_cookie);
+                    }
+                    Err(e) => tracing::warn!("挑战求解失败（继续尝试直连）: {e}"),
+                }
+            } else if crate::waf::is_hard_block(&body) {
+                tracing::warn!("裸请求即被 bot-score 硬拒——尝试注入 Cookie 后由 Chrome 重试");
+            }
         }
+    }
+
+    // Cookie 头合并：登录 Cookie + acw（挑战解出的）
+    let mut headers = build_cookie_header(acw.as_deref());
+    if headers.is_empty() {
+        // 无任何 Cookie 可注入：仍设置一个空 map 会覆盖 UA 等，跳过
+    } else {
+        let hdr_ref: HashMap<&str, &str> =
+            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        tab.set_extra_http_headers(hdr_ref)
+            .context("注入 Cookie 头失败")?;
+        tracing::info!("已注入 Cookie 头（len={}）", headers.values().next().map(|v| v.len()).unwrap_or(0));
     }
 
     let title_key = title.chars().take(12).collect::<String>();
