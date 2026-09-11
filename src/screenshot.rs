@@ -47,6 +47,21 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path) -> Result<PathBuf> {
         .context("启动 headless chromium 失败（检查 chrome/chromium 是否安装）")?;
     let tab = browser.new_tab().context("打开新标签页失败")?;
 
+    // 注入 CSDN 登录 Cookie（CSDN_COOKIES 环境变量，单行 k=v; k=v）：
+    // 实测矩阵（2026-09-11）：无 Cookie 的 headless Chrome 从数据中心 IP 访问
+    // 文章页 = 403 bot-score 硬拒；带登录 Cookie = 降级为 521 JS 挑战，而
+    // Chrome 原生执行挑战 JS 种 acw cookie 后放行 → 截图可行
+    if let Ok(ck) = std::env::var("CSDN_COOKIES") {
+        let ck = ck.trim();
+        if !ck.is_empty() {
+            let mut headers = std::collections::HashMap::new();
+            headers.insert("Cookie", ck);
+            tab.set_extra_http_headers(headers)
+                .context("注入 Cookie 头失败")?;
+            tracing::info!("已注入 CSDN 登录 Cookie（len={}）", ck.len());
+        }
+    }
+
     let title_key = title.chars().take(12).collect::<String>();
     let mut rendered = false;
 
@@ -110,7 +125,7 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path) -> Result<PathBuf> {
 pub fn wait_article_ready(url: &str, timeout_secs: u64) -> Result<()> {
     let client = reqwest::blocking::Client::new();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    let mut last_status = String::from("no-response");
+    let mut last_status;
     loop {
         match client.get(url).timeout(std::time::Duration::from_secs(20)).send() {
             Ok(resp) => {
