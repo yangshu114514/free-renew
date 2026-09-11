@@ -27,7 +27,7 @@ cmd=login&id_mobile={手机号}&password={密码}
 ```
 
 成功：`{"response":"200","url":"/control","msg":"登录成功"}`
-Cookie：`session_id`（`.sanfengyun.com` 同款机制，域为阿贝云）+ WAF Cookie（`acw_tc`/`cdn_sec_tc`）
+Cookie：`session_id`（HttpOnly，域为阿贝云；与三丰云同款机制）+ WAF Cookie（`acw_tc`/`cdn_sec_tc`）
 
 ### 查询延期状态
 

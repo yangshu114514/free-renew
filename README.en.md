@@ -2,7 +2,7 @@
 
 English | [简体中文](README.md)
 
-Auto-renewal for the "permanently free cloud servers" of Abeiyun (阿贝云) and Sanfengyun (三丰云). Daily automated checks; when a renewal is due: article generation → publishing → screenshot → submission, fully automated, with WeChat notifications on success or failure.
+Auto-renewal for the "permanently free cloud servers" of Abeiyun (阿贝云) and Sanfengyun (三丰云). Daily automated checks; when a renewal is due: article generation → publishing → screenshot → submission, fully automated; on success or failure you get an alert through your configured notification backend (optional — without one, results are visible on the Actions page only).
 
 > ⚠️ **Disclaimer**: for learning and personal technical research only. Whether vendor terms permit such automation is your call; all consequences (account suspension, instance reclamation, data loss) are borne by the user. Full terms at the end of this page.
 
@@ -49,6 +49,9 @@ Other direct credits (full list in NOTICE):
 - **[rust-headless-chrome](https://github.com/rust-headless-chrome/rust-headless-chrome)** (MIT) - CDP client; the screenshot anti-detection capability (webdriver/chrome/plugins/permissions/webgl bypass) comes from its built-in enable_stealth_mode().
 - **[gautamkrishnar/keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow)** (MIT) - prevents GitHub's 60-day auto-disable of scheduled workflows.
 - CSDN x-ca signing constants: public constants embedded in CSDN's own frontend JS, as documented in community articles.
+- Sanfengyun official help documents (content_1009 / content_1156) - source of the review red lines.
+- NodeLoc / CSDN community threads - vendor review failure-mode intel.
+
 ## License
 
 [Apache-2.0](LICENSE) · © 2026 yangshu114514 · third-party attribution in [NOTICE](NOTICE)
