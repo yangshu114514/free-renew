@@ -49,7 +49,7 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
     let mut client = cloud::CloudClient::new(account.clone(), cfg.http_timeout);
 
     // 1. 登录 + 查状态
-    let (state, extra) = match client.login_and_check() {
+    let (state, extra, raw) = match client.login_and_check() {
         Ok(v) => {
             run.event(step("login_and_check").as_str(), "ok",
                 json!({"vendor": vendor, "username": masked_user}));
@@ -67,12 +67,23 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
     };
     tracing::info!("{vendor} 状态: {state:?} ({extra})");
     run.event(step("check_status").as_str(), "ok", json!({
-        "vendor": vendor, "state": format!("{state:?}"), "extra": extra,
+        "vendor": vendor, "state": format!("{state:?}"), "extra": extra, "raw": raw,
     }));
 
     match state {
+    match state {
         RenewState::CanRenew => {
             run.event(step("decision").as_str(), "will_renew", json!({"vendor": vendor}));
+            // 交叉核对：状态接口的 delay_state 是参考字段，最近一次延期记录
+            // （真历史接口）一并落日志，供事后核对审核结论
+            if let Ok(hist) = client.review_history() {
+                let latest = hist.pointer("/msg/content/0");
+                if latest.is_some() {
+                    run.event(step("history").as_str(), "ok", json!({
+                        "vendor": vendor, "latest_record": latest,
+                    }));
+                }
+            }
         }
         RenewState::UnderReview => {
             tracing::info!("{vendor} 已提交待人工审核，本轮无事可做");
@@ -87,6 +98,12 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
         RenewState::Unknown => {
             tracing::warn!("{vendor} 状态未识别（{extra}），保守起见不执行续期，请人工确认");
             run.event(step("decision").as_str(), "skip_unknown", json!({"vendor": vendor, "raw": extra}));
+            // 状态看不懂 = 潜在风险。只写 Actions 日志用户永远看不到——发通知让人工介入
+            notify::send(
+                &cfg.notify,
+                &format!("{vendor} 状态未识别，跳过本轮"),
+                &format!("原始响应：{extra}\n程序未识别该状态组合，保守跳过。请人工核对控制台，确认到期时间。"),
+            );
             return Ok(true);
         }
     }
