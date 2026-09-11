@@ -96,7 +96,10 @@ Linux/macOS：`cargo run --release --bin csdn_cookie_export`（功能相同）�
    gh secret set NOTIFY_OPENCLAW_USER     --body "bot用户名"
    gh secret set NOTIFY_OPENCLAW_PASSWORD --body "bot密码"
    ```
-5. 验证：本地配好 config.toml 后跑 `./target/release/free-renew --test-notify`
+5. 验证：本地设好三个环境变量（或写好 config.toml 的 [notify.openclaw] 段）后跑
+   `./target/release/free-renew --test-notify`；
+   也可以直接在 Actions 手动 Run 一轮，看微信是否收到"续期已提交"或失败告警。
+   两种途径等价：Secrets（=Actions 环境变量）与 config.toml 均可驱动 OpenClaw 后端。
 
 ## Cookie 过期维护（唯一周期性人工任务）
 
