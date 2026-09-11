@@ -52,8 +52,8 @@ if ($inRepo -and $repo -and $repo -ne $UPSTREAM) {
 本向导会基于 $UPSTREAM 创建**你自己的私有副本**（Secrets 存在你名下）。
 
 副本可见性说明（GitHub Actions 规则）:
-  • Public  → Actions 完全免费无限量（推荐）
-  • Private → 每月 2000 免费分钟（本工具每天约用 2 分钟，也绰绰有余）
+  • Private（强烈推荐）→ 每月 2000 免费分钟（本工具每天约用 2 分钟，绰绰有余）
+  • Public → Actions 无限量，但 Actions 日志可能包含厂商返回的账号信息（见安全清单）
   注意: Actions 仅可用于与仓库代码相关的自动化，禁止当通用算力薅（GitHub AUP）
 "@ -ForegroundColor Gray
     $ans = Read-Host "是否现在为你 fork 并 clone? (Y/n)"
@@ -94,7 +94,7 @@ Ok "两台云账号完成"
 Step 3 "LLM 配置（写文章用，任何 OpenAI 兼容接口）"
 $llmBase  = Read-Host "API 基础地址 (如 https://api.example.com/v1)"
 $llmKey   = Read-Host "API Key"
-$llmModel = Read-Host "模型名 (如 deepseek-chat / gpt-4o-mini / agnes-2.5-flash)"
+$llmModel = Read-Host "模型名 (如 deepseek-chat / gpt-4o-mini)"
 $ans = Read-Host "发一条测试消息验证连通性? 会消耗约 20 token (默认 N)"
 if ($ans -match "^[yY]") {
     try {
@@ -102,7 +102,7 @@ if ($ans -match "^[yY]") {
             -Headers @{ Authorization = "Bearer $llmKey" } -ContentType "application/json" `
             -Body (@{ model = $llmModel; messages = @(@{ role = "user"; content = "回复:ok" }); max_tokens = 10 } | ConvertTo-Json -Depth 5) `
             -TimeoutSec 60
-        Ok "LLM 连通: " + $r.choices[0].message.content
+        Ok ("LLM 连通: " + $r.choices[0].message.content)
     } catch {
         Warn "LLM 测试失败: $($_.Exception.Message)"
         $go = Read-Host "仍要继续使用此配置? (y/N)"
@@ -139,7 +139,7 @@ Set-GhSecret "CSDN_COOKIES" (Get-Content $cookieFile -Raw).Trim()
 Ok "CSDN Cookie 完成（寿命数月；如配置了通知渠道，过期时会收到提醒）"
 
 # ── [5/6] 通知 ───────────────────────────────────────────────
-Step 5 "通知配置（出事时微信/其他渠道喊你；强烈建议配）"
+Step 5 "通知配置（出事时通过所选渠道提醒你；强烈建议配）"
 Write-Host @"
 通知后端选择:
   1 = OpenClaw 网关 → 微信（你已有一台跑 OpenClaw 的服务器时选这个）
@@ -152,7 +152,7 @@ if ($backend -eq "1") {
     Write-Host "需要: 一台跑 OpenClaw 的服务器 + 公网可达的 /v1/chat/completions 端点 + basic auth bot 账号。"
     Write-Host "接线步骤已写在: docs/SETUP.md 的「OpenClaw 网关通知」一节（也可按 Ctrl+点击打开 GitHub 上此文件）"
     Start-Process "https://github.com/$UPSTREAM/blob/main/docs/SETUP.md" 2>$null
-    $ocUrl  = Read-Host "chatCompletions 完整 URL (如 https://你的域名/v1/chat/completions)"
+    $ocUrl  = Read-Host "chatCompletions 完整 URL (如 https://你的域名或IP:端口/v1/chat/completions)"
     $ocUser = Read-Host "basic auth 用户名"
     $ocPass = Read-Host "basic auth 密码"
     Set-GhSecret "NOTIFY_OPENCLAW_URL"      $ocUrl
@@ -165,7 +165,7 @@ if ($backend -eq "1") {
             $r = Invoke-RestMethod -Method Post -Uri $ocUrl -Headers @{ Authorization = "Basic $auth" } `
                 -ContentType "application/json" -TimeoutSec 90 `
                 -Body (@{ model = "openclaw"; messages = @(@{ role = "user"; content = "自动化安装测试:请用微信消息工具发送【free-renew 安装成功】然后只回复:已发送" }) } | ConvertTo-Json -Depth 5)
-            Ok "请求已投出（agent 异步执行，微信以实际收到为准；CF 超时也不影响送达）"
+            Ok "请求已投出（agent 异步执行，微信以实际收到为准；网关超时也不影响送达）"
         } catch { Warn "请求异常 $($_.Exception.Message)——若为超时，agent 可能仍在执行，稍后查微信" }
     }
 } elseif ($backend -eq "2") {
@@ -187,8 +187,9 @@ Write-Host "  cron = `"$cron`" (UTC) = 北京时间 $t:30"
 Write-Host ""
 Write-Host "──────── 部署确认 ────────" -ForegroundColor Cyan
 Write-Host "仓库:     $repo"
-Write-Host "三丰云:   $($sfUser.Substring(0,3))****$($sfUser.Substring($sfUser.Length-2))"
-Write-Host "阿贝云:   $($abUser.Substring(0,3))****$($abUser.Substring($abUser.Length-2))"
+function Mask($s) { if ($s.Length -ge 5) { $s.Substring(0,3) + "****" + $s.Substring($s.Length-2) } else { "****" } }
+Write-Host "三丰云:   $(Mask $sfUser)"
+Write-Host "阿贝云:   $(Mask $abUser)"
 Write-Host "LLM:      $llmModel @ $($llmBase)"
 Write-Host "CSDN:     Cookie 已入 Secrets"
 Write-Host "通知:     $(if ($backend -eq '1') { 'OpenClaw→微信' } elseif ($backend -eq '2') { 'Webhook' } else { '未配置' })"
@@ -204,7 +205,7 @@ if (Test-Path $wfPath) {
     if ($yaml -match '- cron: "([^"]+)"' -and $Matches[1] -ne $cron) {
         ($yaml -replace '- cron: "[^"]*"', "- cron: `"$cron`"") | Set-Content $wfPath -Encoding UTF8 -NoNewline
         git add .github/workflows/renew.yml
-        git -c user.name="setup" -c user.email="setup@users.noreply.github.com" commit -m "chore: schedule = $t:30 CST" | Out-Null
+        git commit -m "chore: schedule = $t:30 CST" | Out-Null
         git push 2>&1 | Out-Null
         Ok "定时已改为每天 $t:30 北京时间（GitHub cron 实际触发可能延迟数分钟，属正常）"
     }
@@ -212,9 +213,8 @@ if (Test-Path $wfPath) {
 
 # 首跑
 Write-Host ""
-# 官方规则：fork 出来的仓库 scheduled workflows 默认禁用，必须先 Enable 一次。
-# 判定：remote url 指向用户名下且 ≠ 上游（gh repo fork 后 remote 无 "fork" 字样，
-# 不能靠字符串匹配，直接用 gh api 查 is_fork 最可靠）。
+# fork 仓库的 scheduled workflows 被 GitHub 默认禁用，需先启用一次。
+# fork 判定用 gh api 查 is_fork（remote url 字符串匹配不可靠）。
 if ($repo -and $repo -ne $UPSTREAM) {
     $isFork = $false
     try {
@@ -241,9 +241,9 @@ Write-Host ""
 Write-Host "🎉 部署完成！" -ForegroundColor Green
 Write-Host @"
 后续你唯一可能要做的事:
-  • CSDN Cookie 过期(数月后) → 微信收到提醒 → 重跑 scripts/refresh-csdn-cookie.ps1
+  • CSDN Cookie 过期(数月后) → 收到通知提醒(需已配置通知渠道) → 重跑 scripts/refresh-csdn-cookie.ps1
   • 密码轮换 → 仓库 Settings→Secrets 直接改
   • 一切正常时它只是每天定时默默看一眼，没到期 4 秒退出
-到期日临近时你会收到微信通知。
+到期日临近或出现异常时，若已配置通知渠道，你会收到提醒。
 "@ -ForegroundColor Green
 

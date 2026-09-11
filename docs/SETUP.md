@@ -77,19 +77,22 @@ Linux/macOS：`cargo run --release --bin csdn_cookie_export`（功能相同）�
 
 ## OpenClaw 网关通知（微信直收）
 
-要求：有一个跑着 OpenClaw 的服务器 + Cloudflare 隧道 + lighttpd/nginx 反代。
+硬性要求只有两条：
+
+1. 跑着 OpenClaw 的服务器的 `/v1/chat/completions` 端点**能被 GitHub Actions 从公网访问到**——怎么暴露随你（公网 IP 直连、frp、Cloudflare Tunnel、其他隧道均可，下文步骤以作者自用的 Cloudflare Tunnel + 反代为例）
+2. 端点**必须带认证**——暴露在公网的网关没有认证，任何人都相当于拿到了你 agent 的指令入口。basic auth 是最低要求（htpasswd 加专用 bot 用户，别用你本人的）
 
 1. 网关 `openclaw.json` 开启：
    ```json
    "gateway": { "http": { "endpoints": { "chatCompletions": { "enabled": true } } } }
    ```
-2. 反代给 `/v1/` 路径配 basic auth（htpasswd 加专用 bot 用户，别用你本人的）
+2. 反代给 `/v1/` 路径配 basic auth（认证由反代层实现；用其他暴露方式时，认证手段同理自选）
 3. 给 agent 发消息拿微信 target：
    > "用 message 工具给微信发一条测试消息，告诉我你用的完整 target"
    > （形状 `xxxx@im.wechat`，**裸 ID，无 user: 前缀**——加前缀会 ret=-3）
 4. Secrets 填三个：
    ```bash
-   gh secret set NOTIFY_OPENCLAW_URL      --body "https://你的域名/v1/chat/completions"
+   gh secret set NOTIFY_OPENCLAW_URL      --body "https://你的域名或IP:端口/v1/chat/completions"
    gh secret set NOTIFY_OPENCLAW_USER     --body "bot用户名"
    gh secret set NOTIFY_OPENCLAW_PASSWORD --body "bot密码"
    ```
@@ -101,16 +104,16 @@ Linux/macOS：`cargo run --release --bin csdn_cookie_export`（功能相同）�
 
 **处置（30 秒）**：再跑一遍 `.\scripts\refresh-csdn-cookie.ps1`。专用 profile 里登录态通常还活着，脚本直接重新导出 → 按 y 直传 Secret → 完事。如果 profile 也过期了才需要重新扫码。
 
-**预防**：CSDN Cookie 实测寿命数月。可以在日历上设个 2 个月提醒，或者干脆等通知来了再处理（失败当天就会尝试提醒（需已配置通知渠道），不会静默丢失）。
+**预防**：CSDN Cookie 实测寿命数月。可以在日历上设个 2 个月提醒，或者干脆等通知来了再处理——失败当天就会尝试告警（需已配置通知渠道），不会静默丢失。
 
 ## 日常运维速查
 
 | 症状 | 原因 | 处置 |
 |---|---|---|
-| Actions 红叉，微信没消息 | 通知后端挂了/没配 | 查 run-logs artifact 里的 JSONL；修通知后重跑 |
-| 微信"发文失败" | CSDN Cookie 过期 | §Cookie 过期维护 |
-| 微信"续期提交被拒" | 厂商审核拒绝（可能内容撞车/账号风控） | 看 JSONL 里 `raw` 字段的厂商原话；改 [ai].angles 换角度池 |
-| 微信"提交异常 ret=-3"之类 | 通知指令问题 | 重跑 --test-notify；核对 target 规则 |
+| Actions 红叉，没收到任何通知 | 通知后端挂了/没配 | 查 run-logs artifact 里的 JSONL；修通知后重跑 |
+| 通知"发文失败" | CSDN Cookie 过期 | §Cookie 过期维护 |
+| 通知"续期提交被拒" | 厂商审核拒绝（可能内容撞车/账号风控） | 看 JSONL 里 `raw` 字段的厂商原话；改 [ai].angles 换角度池 |
+| 通知"提交异常 ret=-3"之类 | 通知指令问题 | 重跑 --test-notify；核对 target 规则 |
 | 连续多天红叉 | 可能厂商改协议 | 提 issue / 对照 docs/protocol/ 手动复查端点 |
 | 两台都到期但都成功 | 正常 | 每家 5 天窗口，run 里显示下次到期时间 |
 
