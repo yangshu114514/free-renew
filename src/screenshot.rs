@@ -99,7 +99,12 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path, login_cookie: Option<&s
         tracing::info!("已注入 Cookie 头（len={}）", headers.values().next().map(|v| v.len()).unwrap_or(0));
     }
 
-    let title_key = title.chars().take(12).collect::<String>();
+    // title 为空 = 跳过标题匹配（只防挑战页）；非空 = 验证渲染的是真文章页
+    let title_key = if title.is_empty() {
+        String::new()
+    } else {
+        title.chars().take(12).collect::<String>()
+    };
     let mut rendered = false;
 
     // 挑战感知循环：最多 4 次导航。挑战 JS 在首次加载时执行并种 cookie，
@@ -116,7 +121,7 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path, login_cookie: Option<&s
             std::thread::sleep(std::time::Duration::from_secs(3));
             continue;
         }
-        if !html.contains(&title_key) {
+        if !title_key.is_empty() && !html.contains(&title_key) {
             tracing::warn!("第 {attempt} 次导航：页面不含文章标题关键词（len={}），重试", html.len());
             std::thread::sleep(std::time::Duration::from_secs(3));
             continue;
