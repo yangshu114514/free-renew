@@ -80,3 +80,26 @@ jobs:
           echo "--- toutiao ---"
           curl -s -o /dev/null -w "%{http_code}" -m 15 -A "$UA" https://www.toutiao.com/article/7400000000000000000/
           echo ""
+
+  sshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release
+      - name: Run --test-screenshot (cookie-injected, live article)
+        env:
+          CSDN_COOKIES: ${{ secrets.CSDN_COOKIES }}
+          CHROME_PATH: /usr/bin/google-chrome
+          FREE_RENEW_DEBUG_DIR: /tmp/sshot-debug
+        run: ./target/release/free-renew --test-screenshot "https://blog.csdn.net/2503_92868667/article/details/165005042"
+      - name: upload screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-screenshot
+          path: /tmp/sshot-debug/
+          if-no-files-found: ignore
