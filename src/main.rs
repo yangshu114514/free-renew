@@ -254,15 +254,28 @@ fn main() -> Result<()> {
             anyhow::bail!("通知链路未配置（config.toml [notify.openclaw] 或 [notify].webhook_url）");
         }
         let title = "free-renew 通知链路自检";
+        let backend_label = if cfg.notify.openclaw.is_some() {
+            "openclaw（网关 agent → 微信）"
+        } else {
+            "webhook"
+        };
+        let chain = if cfg.notify.openclaw.is_some() {
+            "本工具 → 网关 → agent → 微信"
+        } else {
+            "本工具 → webhook"
+        };
         let detail = format!(
-            "通知后端: {}\n本轮为人工触发测试，非真实续期。你看到这条消息说明: Actions → 网关 → agent → 微信 全链路可用。",
-            if cfg.notify.openclaw.is_some() { "openclaw(网关agent→微信)" } else { "webhook" }
+            "通知后端: {}\n本轮为人工触发测试，非真实续期。你看到这条消息说明: {} 全链路可用。",
+            backend_label, chain
         );
         notify::send(&cfg.notify, title, &detail);
         run.event("test_notify", "ok", json!({
             "backend": if cfg.notify.openclaw.is_some() { "openclaw" } else { "webhook" },
         }));
-        println!("通知已投递（fire-and-forget），查微信。");
+        println!(
+            "通知已投递（fire-and-forget），到你的 {} 查收。",
+            if cfg.notify.openclaw.is_some() { "微信" } else { "webhook 接收端" }
+        );
         return Ok(());
     }
 
