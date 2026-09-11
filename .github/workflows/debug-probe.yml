@@ -1,0 +1,60 @@
+name: debug-probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: vendor API reachability (sanfengyun IP-ban check)
+        run: |
+          echo "--- sanfengyun https ---"
+          curl -s -o /dev/null -w "%{http_code} (%{time_total}s)" -m 20 https://api.sanfengyun.com/www/login.php || echo " FAIL"
+          echo ""
+          echo "--- sanfengyun http ---"
+          curl -s -o /dev/null -w "%{http_code} (%{time_total}s)" -m 20 http://api.sanfengyun.com/www/login.php || echo " FAIL"
+          echo ""
+          echo "--- abeiyun https ---"
+          curl -s -o /dev/null -w "%{http_code} (%{time_total}s)" -m 20 https://api.abeiyun.com/www/login.php || echo " FAIL"
+          echo ""
+
+      - name: csdn plain-HTTP probe (today's live article)
+        run: |
+          curl -s -o /tmp/a.html -w "HTTP:%{http_code} size:%{size_download}" -m 20 \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            https://blog.csdn.net/2503_92868667/article/details/165004650
+          echo ""
+          head -c 200 /tmp/a.html
+
+      - name: headless chrome probe — default headless
+        run: |
+          google-chrome --headless --no-sandbox --disable-gpu --dump-dom --virtual-time-budget=10000 \
+            "https://blog.csdn.net/2503_92868667/article/details/165004650" > /tmp/dom1.html 2>/tmp/e1.log || true
+          echo "DOM size: $(wc -c < /tmp/dom1.html)"
+          grep -o "iw(\|403 Forbidden\|article_title\|WAF" /tmp/dom1.html | sort | uniq -c || echo "(no signature)"
+
+      - name: headless chrome probe — new headless mode
+        run: |
+          google-chrome --headless=new --no-sandbox --disable-gpu --dump-dom --virtual-time-budget=10000 \
+            "https://blog.csdn.net/2503_92868667/article/details/165004650" > /tmp/dom2.html 2>/tmp/e2.log || true
+          echo "DOM size: $(wc -c < /tmp/dom2.html)"
+          grep -o "iw(\|403 Forbidden\|article_title\|WAF" /tmp/dom2.html | sort | uniq -c || echo "(no signature)"
+
+      - name: headless chrome probe — new headless + CSDN cookies
+        env:
+          CSDN_COOKIES: ${{ secrets.CSDN_COOKIES }}
+        run: |
+          # 把单行 cookie 拆成 CDP 可注入的格式：用 --user-data-dir 预置不现实，
+          # 改用 chrome 的 --headless=new + Network injection 不可行(CLI)，
+          # 这里用带 cookie 的 curl 对照：同 IP 下带登录 cookie 是否放行
+          CODE=$(curl -s -o /tmp/a3.html -w "%{http_code}" -m 20 \
+            -H "Cookie: $CSDN_COOKIES" \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            https://blog.csdn.net/2503_92868667/article/details/165004650)
+          echo "with-cookies HTTP:$CODE size:$(wc -c < /tmp/a3.html)"
+          grep -o "iw(\|403 Forbidden\|article_title" /tmp/a3.html | sort | uniq -c || true
