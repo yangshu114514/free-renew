@@ -108,7 +108,14 @@ impl AppConfig {
             None => None,
         };
 
-        let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let env = |k: &str| {
+            std::env::var(k)
+                .ok()
+                // 所有凭据/URL 一律 trim：Secret 注入渠道（管道/网页粘贴）常混入
+                // 尾部换行或空白，Agnes 实测会对带 \n 的 Bearer 报“未提供令牌”
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
 
         // ---- 云账号：env 优先，文件兜底；enabled=false 跳过 ----
         let mut accounts = Vec::new();
