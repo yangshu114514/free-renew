@@ -2,7 +2,7 @@
 
 [English](README.en.md) | 简体中文
 
-阿贝云 / 三丰云「永久免费云服务器」自动续期。每天自动检查，到期自动完成「写文章 → 发文 → 截图 → 提交审核」全流程，出任何问题微信通知你。
+阿贝云 / 三丰云「永久免费云服务器」自动续期。每天自动检查，到期自动完成「写文章 → 发文 → 截图 → 提交审核」全流程，出出问题时通过配置的通知渠道（OpenClaw→微信、通用 Webhook 等）向你告警；未配置通知时，仅 Actions 页面可见。
 
 > ⚠️ **免责声明**：本工具仅供学习与个人技术研究。厂商条款是否允许此类自动化由你自行判断，使用产生的一切后果（账号封禁/服务器回收/数据丢失）由使用者承担。完整条款见文末。
 
@@ -17,11 +17,11 @@ irm https://raw.githubusercontent.com/yangshu114514/free-renew/main/install.ps1 
 
 向导会问你 6 个问题：云账号密码 → LLM API（可选测试）→ CSDN 扫码 → 通知方式 → 每天几点跑 → 确认。全程约 5 分钟。
 
-Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.md) 手动走一遍（内容相同，含 OpenClaw 微信通知接线、故障速查表）。
+Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.md) 手动走一遍（内容相同，含可选的 OpenClaw 微信通知接线、故障速查表）。
 
 ## 日常使用：只有一个命令
 
-CSDN Cookie 过期时（数月一次，微信会提醒你）：
+CSDN Cookie 过期时（数月一次；如配置了通知渠道，会收到提醒）：
 
 ```powershell
 .\scripts\refresh-csdn-cookie.ps1
@@ -40,7 +40,7 @@ CSDN Cookie 过期时（数月一次，微信会提醒你）：
 | [config.example.toml](config.example.toml) | 全部配置项及注释（LLM 词表/角度池/禁词均可自定义） |
 | [NOTICE](NOTICE) | 第三方归属声明 |
 
-架构一句话：**GitHub Actions 每天跑一次本仓库的 Rust 二进制**——登录云厂商查状态，没到期 4 秒退出；到期则 LLM 生成一篇随机角度的体验文章（机器校验禁词/必含词）发到 CSDN，截图后提交给厂商审核，成功或失败都经 OpenClaw 网关推送微信。60 天仓库无提交会导致定时任务被 GitHub 停用，已内置 [keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow) 自动保活。
+架构一句话：**GitHub Actions 每天跑一次本仓库的 Rust 二进制**——登录云厂商查状态，没到期 4 秒退出；到期则 LLM 生成一篇随机角度的体验文章（机器校验禁词/必含词）发到 CSDN，截图后提交给厂商审核，成功或失败都会通过已配置的通知渠道告警（OpenClaw→微信 / 通用 Webhook，可选）。60 天仓库无提交会导致定时任务被 GitHub 停用，已内置 [keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow) 自动保活。
 
 ## 致谢
 
@@ -68,3 +68,5 @@ CSDN Cookie 过期时（数月一次，微信会提醒你）：
 6. 本项目按 Apache-2.0 许可证「原样」提供，作者不对任何直接或间接损失负责。继续使用即表示你已阅读、理解并同意上述全部条款。
 
 English summary: for learning and personal research only; you are responsible for complying with all vendors' Terms of Service; any consequences (account suspension, data loss) are borne by the user; LLM-generated content must comply with platform policies and be truthfully declared; keep off-site backups of important data; provided "as is" under Apache-2.0 with no warranty.
+
+

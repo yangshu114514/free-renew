@@ -1,5 +1,8 @@
 //! free-renew：阿贝云/三丰云 免费服务器自动续期
 //!
+//! SPDX-License-Identifier: Apache-2.0
+//! 协议层致谢 BookerLiu/FreeServer (Apache-2.0)，详见 NOTICE
+//!
 //! 流程（每天被 Actions cron 拉起，幂等）：
 //! login API → check_free_delay → [未到期/审核中] 退出 / [到期]
 //! → LLM 写文章 → CSDN 发布 → 截图 → multipart 提交 free_delay_add → 失败通知
@@ -313,5 +316,6 @@ fn main() -> Result<()> {
     tracing::info!("=== free-renew 结束，耗时 {} 秒 ===", run.elapsed_secs());
     Ok(())
 }
+
 
 

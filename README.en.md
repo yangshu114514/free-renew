@@ -21,7 +21,7 @@ Linux/macOS or manual route: clone the repo and follow [docs/SETUP.md](docs/SETU
 
 ## Daily use: one command
 
-When the CSDN cookie expires (every few months, WeChat will tell you):
+When the CSDN cookie expires (every few months; you'll receive a notification if a notify backend is configured):
 
 ```powershell
 .\scripts\refresh-csdn-cookie.ps1
@@ -61,5 +61,6 @@ Other direct credits (full list in NOTICE):
 4. No user credentials are stored, uploaded, or collected by this project; all configuration lives in your local files or private repo Secrets.
 5. Free-server stability is decided by the vendors; NO warranty of data safety. **Always keep off-site backups.**
 6. Provided "as is" under Apache-2.0. Continued use constitutes agreement with all of the above.
+
 
 

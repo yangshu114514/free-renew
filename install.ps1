@@ -136,7 +136,7 @@ if ($cookieAge -gt 2) {
     Die "Cookie 文件是 $([math]::Round($cookieAge)) 分钟前的残留，疑似本次刷新失败。请重跑。"
 }
 Set-GhSecret "CSDN_COOKIES" (Get-Content $cookieFile -Raw).Trim()
-Ok "CSDN Cookie 完成（寿命数月，过期时微信会提醒你重跑刷新脚本）"
+Ok "CSDN Cookie 完成（寿命数月；如配置了通知渠道，过期时会收到提醒）"
 
 # ── [5/6] 通知 ───────────────────────────────────────────────
 Step 5 "通知配置（出事时微信/其他渠道喊你；强烈建议配）"
@@ -246,3 +246,4 @@ Write-Host @"
   • 一切正常时它只是每天定时默默看一眼，没到期 4 秒退出
 到期日临近时你会收到微信通知。
 "@ -ForegroundColor Green
+
