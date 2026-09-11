@@ -52,7 +52,7 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
             v
         }
         Err(e) => {
-            let detail = e.to_string();
+            let detail = format!("{e:#}");
             tracing::error!("{vendor} 登录/查状态失败: {detail}");
             run.event(step("login_and_check").as_str(), "failed", json!({
                 "vendor": vendor, "error": detail,
@@ -109,7 +109,7 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
             a
         }
         Err(e) => {
-            let detail = e.to_string();
+            let detail = format!("{e:#}");
             run.event(step("llm.done").as_str(), "failed", json!({"vendor": vendor, "error": detail}));
             notify::send(&cfg.notify, &format!("{vendor} 文章生成失败"), &detail);
             return Ok(false);
@@ -129,7 +129,7 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
             u
         }
         Err(e) => {
-            let detail = e.to_string();
+            let detail = format!("{e:#}");
             run.event(step("publish.done").as_str(), "failed", json!({"vendor": vendor, "error": detail}));
             notify::send(&cfg.notify, &format!("{vendor} 发文失败"), &detail);
             return Ok(false);
@@ -298,3 +298,4 @@ fn main() -> Result<()> {
     tracing::info!("=== free-renew 结束，耗时 {} 秒 ===", run.elapsed_secs());
     Ok(())
 }
+
