@@ -117,8 +117,8 @@ impl CloudClient {
         Err(last_err.unwrap_or_else(|| anyhow!("所有端点均失败: {url}")))
     }
 
-    /// 登录并立刻查询免费服务器延期状态。返回 (状态, next_time 或说明)。
-    pub fn login_and_check(&mut self) -> Result<(RenewState, String)> {
+    /// 登录并立刻查询免费服务器延期状态。返回 (状态, next_time 或说明, 原始响应摘录)。
+    pub fn login_and_check(&mut self) -> Result<(RenewState, String, String)> {
         let login_url = self.account.login_url.clone();
         let form = [
             ("cmd", "login"),
@@ -139,7 +139,7 @@ impl CloudClient {
         self.check_status()
     }
 
-    pub fn check_status(&self) -> Result<(RenewState, String)> {
+    pub fn check_status(&self) -> Result<(RenewState, String, String)> {
         if !self.logged_in {
             anyhow::bail!("请先 login_and_check()");
         }
@@ -156,7 +156,10 @@ impl CloudClient {
             anyhow::bail!("状态接口异常: {}", crate::http::truncate_chars(&body, 300));
         }
         let (state, extra) = parse_state(self.account.profile.key, &inner);
-        Ok((state, extra))
+        // 原始响应摘录一并返回：厂商 API 字段形状常有漂移，
+        // 日志里留原文，状态判定有疑问时不用再抓包猜
+        let raw = crate::http::truncate_chars(&body, 500);
+        Ok((state, extra, raw))
     }
 
     /// 提交续期：文章 URL + 截图文件。
@@ -187,8 +190,8 @@ impl CloudClient {
         })
     }
 
-    /// 延期记录列表（审核状态查询，只读）。日常流程不调用，供手动诊断。
-    #[allow(dead_code)]
+    /// 延期记录列表（真·历史记录接口：上一轮提交的审核结论在这里）。
+    /// 审核态/未识别时拉来交叉核对——状态查询接口的 delay_state 只是参考。
     pub fn review_history(&self) -> Result<Value> {
         let url = self.account.renew_url.clone();
         let body = self
@@ -235,9 +238,16 @@ fn parse_state(vendor_key: &str, inner: &Value) -> (RenewState, String) {
     let state_raw = field_str(inner, "delay_state").unwrap_or_default();
     let next_time = field_str(inner, "next_time").unwrap_or_default();
 
-    // 审核态判断放最前：无论 delay_enable 形状怎么漂移，
-    // 只要有中文状态字就绝不提交（宁可跳过，不可重复提交）
-    if state_raw.contains("审核") {
+    // 解析优先级。权衡原则：漏续期的代价是服务器回收+数据丢失，
+    // 远大于一次多余提交被拒（被拒只产生一条通知）。
+    // 1. "审核中" → 上一轮提交仍在人工审核，绝不重复提交
+    // 2. delay_enable=1 → 续期窗口已开，续（历史状态字不影响）
+    // 3. delay_enable=0 → 未到期
+    // 4. 无 enable 字段的 "审核通过" → 上轮延期了结、新窗口可能已开。
+    //    实测 2026-09-12：控制台显示已到期但 API 仅返回该状态字，
+    //    视为可续；若窗口实际未开，多余提交会被厂商拒绝并通知，无害。
+    // 5. 其余 → Unknown，保守跳过
+    if state_raw.contains("审核") && !state_raw.contains("通过") {
         return (RenewState::UnderReview, state_raw);
     }
 
@@ -245,7 +255,7 @@ fn parse_state(vendor_key: &str, inner: &Value) -> (RenewState, String) {
         "sanfengyun" => match (enable.as_deref(), state_raw.as_str()) {
             (Some("1"), _) => RenewState::CanRenew,
             (Some("0"), _) => RenewState::Waiting,
-            // 兜底：形状漂移（delay_enable 缺失）时看 delay_state 的数字形态
+            (_, "审核通过") => RenewState::CanRenew,
             (_, "1") => RenewState::CanRenew,
             (_, "0") => RenewState::Waiting,
             _ => RenewState::Unknown,
@@ -257,13 +267,21 @@ fn parse_state(vendor_key: &str, inner: &Value) -> (RenewState, String) {
             _ => match state_raw.as_str() {
                 "1" => RenewState::CanRenew,
                 "0" => RenewState::Waiting,
+                "审核通过" => RenewState::CanRenew,
                 _ => RenewState::Unknown,
             },
         },
         _ => RenewState::Unknown,
     };
 
-    let extra = if state == RenewState::UnderReview { state_raw } else { next_time };
+    let extra = if state == RenewState::UnderReview {
+        state_raw
+    } else if state == RenewState::Unknown {
+        // 未识别时把能拿到的字段都带上，人工排查不用再抓包
+        format!("enable={enable:?} state={state_raw:?} next_time={next_time:?}")
+    } else {
+        next_time
+    };
     (state, extra)
 }
 
