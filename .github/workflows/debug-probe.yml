@@ -31,6 +31,22 @@ jobs:
           echo ""
           head -c 200 /tmp/a.html
 
+      - name: csdn WAP-share URL probe (curl + chrome)
+        run: |
+          WAP="https://blog.csdn.net/2503_92868667/article/details/165004650?utm_source=blog_wap_share"
+          MOBILE_UA="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+          echo "--- curl desktop UA ---"
+          curl -s -o /tmp/w1.html -w "HTTP:%{http_code} size:%{size_download}" -m 20 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "$WAP"
+          echo ""
+          echo "--- curl mobile UA ---"
+          curl -s -o /tmp/w2.html -w "HTTP:%{http_code} size:%{size_download}" -m 20 -A "$MOBILE_UA" "$WAP"
+          echo ""
+          echo "--- chrome headless=new on wap URL ---"
+          google-chrome --headless=new --no-sandbox --disable-gpu --dump-dom --virtual-time-budget=10000 \
+            --window-size=390,844 "$WAP" > /tmp/w3.html 2>/dev/null || true
+          echo "DOM size: $(wc -c < /tmp/w3.html)"
+          grep -o "iw(\|403 Forbidden\|article_title\|article_content\|阿贝" /tmp/w3.html /tmp/w1.html /tmp/w2.html 2>/dev/null | sort | uniq -c || echo "(no markers)"
+
       - name: headless chrome probe — default headless
         run: |
           google-chrome --headless --no-sandbox --disable-gpu --dump-dom --virtual-time-budget=10000 \
