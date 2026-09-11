@@ -184,6 +184,10 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
 
     // 5. 提交
     run.event(step("submit").as_str(), "ok", json!({"vendor": vendor, "url": url}));
+    // 截图留档进 debug 目录（提交原件照旧使用后删除）：
+    // 厂商审核若拒，run 的 debug-dump artifact 里必须有原图可对照排查
+    let archive = debug_dir.join("postpone_submitted.png");
+    let _ = std::fs::copy(&pic, &archive);
     let result = client.submit_renewal(&url, &pic);
     let _ = std::fs::remove_file(&pic);
     match result {
