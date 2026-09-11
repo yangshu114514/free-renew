@@ -136,18 +136,16 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
         }
     };
 
-    // 4. 等文章可访问 + 截图
-    run.event(step("article_wait").as_str(), "ok", json!({"url": url, "timeout": cfg.article_ready_timeout}));
+    // 4. 就绪检查（非致命：裸 HTTP 会被 CSDN WAF 521 挑战，仅作参考）
+    //    真正的门禁在 screenshot::capture 内（Chrome 过挑战 + 标题验证）。
     if let Err(e) = screenshot::wait_article_ready(&url, cfg.article_ready_timeout) {
-        run.event(step("article_wait").as_str(), "failed", json!({"url": url, "error": e.to_string()}));
-        notify::send(&cfg.notify, &format!("{vendor} 文章页未就绪"), &e.to_string());
-        return Ok(false);
+        tracing::warn!("{vendor} 裸 HTTP 就绪检查未通过（WAF 挑战，Chrome 可过），继续截图: {e}");
     }
 
     let debug_dir = std::path::PathBuf::from(
         std::env::var("FREE_RENEW_DEBUG_DIR").unwrap_or_else(|_| "/tmp/freerenew-debug".into()),
     );
-    let pic = match screenshot::capture(&url, &debug_dir) {
+    let pic = match screenshot::capture(&url, &article.title, &debug_dir) {
         Ok(p) => {
             let meta = std::fs::metadata(&p).ok();
             run.event(step("screenshot").as_str(), "ok", json!({

@@ -46,6 +46,9 @@ pub struct CloudAccount {
     pub profile: &'static CloudProfile,
     pub username: String,
     pub password: String,
+    /// 运行时端点（默认取 profile，可被 {KEY}_LOGIN_URL/{KEY}_RENEW_URL 覆盖）
+    pub login_url: String,
+    pub renew_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -141,10 +144,18 @@ impl AppConfig {
                 continue;
             }
             if let (Some(u), Some(p)) = (username, password) {
+                // 端点 URL 支持环境变量覆盖：厂商 WAF 拉黑 Actions 出口 IP 时，
+                // 可指向自建中继（如服务器反代）而无需改代码
+                let login_url = env(&format!("{key_upper}_LOGIN_URL"))
+                    .unwrap_or_else(|| profile.login_url.to_string());
+                let renew_url = env(&format!("{key_upper}_RENEW_URL"))
+                    .unwrap_or_else(|| profile.renew_url.to_string());
                 accounts.push(CloudAccount {
                     profile,
                     username: u,
                     password: p,
+                    login_url,
+                    renew_url,
                 });
             } else {
                 tracing::info!("[config] {} 未配置凭据，跳过", profile.name);
