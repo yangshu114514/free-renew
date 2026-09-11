@@ -262,6 +262,20 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // --test-screenshot <url>：单独验证截图链路（WAF 挑战 + Cookie 注入 + 标题渲染）
+    if let Some(pos) = std::env::args().position(|a| a == "--test-screenshot") {
+        let url = std::env::args()
+            .nth(pos + 1)
+            .ok_or_else(|| anyhow::anyhow!("--test-screenshot 需要一个文章 URL 参数"))?;
+        let debug_dir = std::path::PathBuf::from(
+            std::env::var("FREE_RENEW_DEBUG_DIR").unwrap_or_else(|_| "/tmp/freerenew-debug".into()),
+        );
+        let pic = screenshot::capture(&url, "阿贝云", &debug_dir)?;
+        let meta = std::fs::metadata(&pic)?;
+        println!("截图成功: {} ({} bytes)", pic.display(), meta.len());
+        return Ok(());
+    }
+
     if cfg.accounts.is_empty() {
         run.event("run.config", "failed", json!({"reason": "no_accounts"}));
         anyhow::bail!("未配置任何云账号（config.toml [clouds.*] 或 *_USERNAME/PASSWORD 环境变量）");
