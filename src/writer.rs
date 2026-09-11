@@ -104,7 +104,7 @@ pub fn generate_article(llm: &LlmConfig, vendor: &str) -> Result<Article> {
     } else {
         llm.required_keywords.clone()
     };
-    let mut retry_feedback: Vec<String> = vec![];
+    let mut retry_feedback: Vec<(String, String)> = vec![]; // (上次正文, 问题清单)
 
     for _attempt in 0..llm.max_retries {
         let angle = llm
@@ -114,19 +114,14 @@ pub fn generate_article(llm: &LlmConfig, vendor: &str) -> Result<Article> {
             .unwrap_or("写一次通用的使用体验");
         let length = llm.lengths.choose(&mut rng).copied().unwrap_or(400);
 
+        // 基础消息 + 全部历史反馈（最近 3 对）喂回模型自纠
         let mut messages = vec![
             json!({"role": "system", "content": system_prompt()}),
             json!({"role": "user", "content": user_prompt(angle, length, vendor, &required, &llm.forbidden_words)}),
         ];
-        if let Some((prev, problems)) = retry_feedback
-            .chunks(2)
-            .next()
-            .map(|c| (c.first(), c.get(1)))
-        {
-            if let (Some(p), Some(pr)) = (prev, problems) {
-                messages.push(json!({"role": "assistant", "content": p}));
-                messages.push(json!({"role": "user", "content": format!("这篇不行，问题：{pr}。重新写一篇，修复以上所有问题。")}));
-            }
+        for (prev, problems) in &retry_feedback {
+            messages.push(json!({"role": "assistant", "content": prev}));
+            messages.push(json!({"role": "user", "content": format!("这篇不行，问题：{problems}。重新写一篇，修复以上所有问题。")}));
         }
 
         let payload = json!({
@@ -147,7 +142,7 @@ pub fn generate_article(llm: &LlmConfig, vendor: &str) -> Result<Article> {
         let status = resp.status();
         let body = resp.text().context("LLM 响应读取失败")?;
         if !status.is_success() {
-            bail!("LLM HTTP {status}: {}", &body[..body.len().min(300)]);
+            bail!("LLM HTTP {status}: {}", crate::http::truncate_chars(&body, 300));
         }
 
         let text = serde_json::from_str::<serde_json::Value>(&body)
@@ -158,7 +153,11 @@ pub fn generate_article(llm: &LlmConfig, vendor: &str) -> Result<Article> {
             .map(str::to_string)
             .context("LLM 响应缺少 content")?;
 
-        let problems = validate(&text, vendor, &required, &llm.forbidden_words);
+        let mut problems = validate(&text, vendor, &required, &llm.forbidden_words);
+        if !text.starts_with('#') {
+            // 无标题的文章审核通过率极低，等同不合规，重试
+            problems.push("第一行不是 # 标题".into());
+        }
         if problems.is_empty() {
             let (title, body) = match text.split_once('\n') {
                 Some((t, rest)) if t.starts_with('#') => {
@@ -173,23 +172,10 @@ pub fn generate_article(llm: &LlmConfig, vendor: &str) -> Result<Article> {
             });
         }
 
-        // 每轮失败都保留完整反馈链（最近 3 对），下一轮全部喂回模型自纠
-        retry_feedback.push(text.clone());
-        retry_feedback.push(problems.join("；"));
-        let pairs: Vec<(String, String)> = retry_feedback
-            .chunks(2)
-            .filter_map(|c| match (c.first(), c.get(1)) {
-                (Some(a), Some(b)) => Some((a.clone(), b.clone())),
-                _ => None,
-            })
-            .collect();
-        messages = vec![
-            json!({"role": "system", "content": system_prompt()}),
-            json!({"role": "user", "content": user_prompt(angle, length, vendor, &required, &llm.forbidden_words)}),
-        ];
-        for (prev, pr) in &pairs {
-            messages.push(json!({"role": "assistant", "content": prev}));
-            messages.push(json!({"role": "user", "content": format!("这篇不行，问题：{pr}。重新写一篇，修复以上所有问题。")}));
+        // 保留完整反馈链（最近 3 对），下一轮全部喂回模型自纠
+        retry_feedback.push((text.clone(), problems.join("；")));
+        if retry_feedback.len() > 3 {
+            retry_feedback.remove(0);
         }
     }
 

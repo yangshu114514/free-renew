@@ -149,7 +149,7 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
     let debug_dir = std::path::PathBuf::from(
         std::env::var("FREE_RENEW_DEBUG_DIR").unwrap_or_else(|_| "/tmp/freerenew-debug".into()),
     );
-    let pic = match screenshot::capture(&url, &article.title, &debug_dir) {
+    let pic = match screenshot::capture(&url, &article.title, &debug_dir, login_cookie(cfg)) {
         Ok(p) => {
             let meta = std::fs::metadata(&p).ok();
             run.event(step("screenshot").as_str(), "ok", json!({
@@ -195,6 +195,12 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
             Ok(false)
         }
     }
+}
+
+/// 截图 Chrome 的登录 Cookie：唯一来源是 config（config.toml 或 CSDN_COOKIES env，
+/// config.rs 已合并）。截文章页本无需登录态，注入只为版面一致（去广告/预览一致）。
+fn login_cookie(cfg: &AppConfig) -> Option<&str> {
+    cfg.csdn.as_ref().map(|c| c.cookie.as_str()).filter(|c| !c.trim().is_empty())
 }
 
 /// 通过配置的发文平台发布文章，返回文章 URL。
@@ -287,7 +293,7 @@ fn main() -> Result<()> {
         let debug_dir = std::path::PathBuf::from(
             std::env::var("FREE_RENEW_DEBUG_DIR").unwrap_or_else(|_| "/tmp/freerenew-debug".into()),
         );
-        let pic = screenshot::capture(&url, "阿贝云", &debug_dir)?;
+        let pic = screenshot::capture(&url, "阿贝云", &debug_dir, login_cookie(&cfg))?;
         let meta = std::fs::metadata(&pic)?;
         println!("截图成功: {} ({} bytes)", pic.display(), meta.len());
         return Ok(());

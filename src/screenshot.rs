@@ -9,29 +9,17 @@ use std::collections::HashMap;
 
 use anyhow::{bail, Context, Result};
 
-const CHALLENGE_SIGNATURES: &[&str] = &["iw(", "acw_sc", "window.onload=setTimeout"];
-
-fn looks_like_challenge(html: &str) -> bool {
-    // 挑战页特征：极短 + 混淆 JS；正常文章页 100KB+ 且含标题
-    if html.len() > 20_000 {
-        return false;
-    }
-    CHALLENGE_SIGNATURES.iter().any(|s| html.contains(s))
-}
-
-/// 组装 Cookie 头：CSDN 登录 Cookie + WAF 挑战解出的 acw Cookie（如有）
-fn build_cookie_header(acw: Option<&str>) -> HashMap<String, String> {
+/// 组装 Cookie 头：登录 Cookie（config 传入）+ WAF 挑战解出的 acw Cookie（如有）
+fn build_cookie_header(acw: Option<&str>, login: Option<&str>) -> HashMap<String, String> {
     let mut headers = HashMap::new();
-    let login = std::env::var("CSDN_COOKIES")
-        .map(|v| v.trim().to_string())
-        .unwrap_or_default();
+    let login = login.map(str::trim).unwrap_or_default();
     let mut merged = String::new();
     if let Some(a) = acw {
         merged.push_str(a);
         merged.push_str("; ");
     }
-    merged.push_str(&login);
-    if !login.is_empty() {
+    merged.push_str(login);
+    if !merged.trim().is_empty() {
         headers.insert("Cookie".into(), merged);
     }
     headers
@@ -39,7 +27,8 @@ fn build_cookie_header(acw: Option<&str>) -> HashMap<String, String> {
 
 /// 对文章页截图（挑战感知：先过 WAF 挑战再截），返回截图路径。
 /// `title` 用于验证渲染的是真文章页而非挑战页。
-pub fn capture(url: &str, title: &str, debug_dir: &Path) -> Result<PathBuf> {
+/// `login_cookie` 来自 config（config.rs 是唯一配置出口），无则 None。
+pub fn capture(url: &str, title: &str, debug_dir: &Path, login_cookie: Option<&str>) -> Result<PathBuf> {
     let out = debug_dir.join("postpone.png");
     std::fs::create_dir_all(debug_dir).context("创建截图目录失败")?;
 
@@ -101,10 +90,8 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path) -> Result<PathBuf> {
     }
 
     // Cookie 头合并：登录 Cookie + acw（挑战解出的）
-    let headers = build_cookie_header(acw.as_deref());
-    if headers.is_empty() {
-        // 无任何 Cookie 可注入：仍设置一个空 map 会覆盖 UA 等，跳过
-    } else {
+    let headers = build_cookie_header(acw.as_deref(), login_cookie);
+    if !headers.is_empty() {
         let hdr_ref: HashMap<&str, &str> =
             headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         tab.set_extra_http_headers(hdr_ref)
@@ -124,7 +111,7 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path) -> Result<PathBuf> {
         std::thread::sleep(std::time::Duration::from_secs(3));
 
         let html = tab.get_content().unwrap_or_default();
-        if looks_like_challenge(&html) {
+        if crate::waf::is_challenge(&html) {
             tracing::warn!("第 {attempt} 次导航命中 WAF 挑战页，等 cookie 生效后重导航");
             std::thread::sleep(std::time::Duration::from_secs(3));
             continue;
@@ -138,13 +125,15 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path) -> Result<PathBuf> {
         break;
     }
     if !rendered {
-        // 截一张现场图用于诊断（可能是挑战页/404），但明确报错，不提交垃圾截图
-        let _ = tab.capture_screenshot(
+        // 截一张现场图落盘用于诊断（可能是挑战页/404），但明确报错，不提交垃圾截图
+        if let Ok(png) = tab.capture_screenshot(
             headless_chrome::protocol::cdp::Page::CaptureScreenshotFormatOption::Png,
             None,
             None,
             true,
-        );
+        ) {
+            let _ = std::fs::write(debug_dir.join("failed.png"), png);
+        }
         if let Ok(html) = tab.get_content() {
             let _ = std::fs::write(debug_dir.join("page.html"), html);
         }

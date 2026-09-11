@@ -112,12 +112,12 @@ impl CsdnClient {
         let status = resp.status();
         let body = resp.text().context("CSDN 响应读取失败")?;
         if !status.is_success() {
-            bail!("CSDN HTTP {status}: {}", &body[..body.len().min(300)]);
+            bail!("CSDN HTTP {status}: {}", crate::http::truncate_chars(&body, 300));
         }
 
         let v: serde_json::Value = serde_json::from_str(&body).context("CSDN 响应 JSON 解析失败")?;
         if v.get("code").and_then(serde_json::Value::as_i64) != Some(200) {
-            bail!("CSDN 发文被拒: {}", &body[..body.len().min(300)]);
+            bail!("CSDN 发文被拒: {}", crate::http::truncate_chars(&body, 300));
         }
         let url = v
             .pointer("/data/url")
