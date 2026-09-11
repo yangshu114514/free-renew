@@ -109,9 +109,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      - name: Upload debug artifacts on failure
-        # 失败时，或截图验证模式（无论成败）都上传：截图就是验证产物
-        if: failure() || (github.event_name == 'workflow_dispatch' && inputs.test_screenshot_url != '')
+      - name: Upload debug artifacts
+        # 每轮都传：包含已提交截图的留档（postpone_submitted.png）与页面 HTML，
+        # 厂商审核被拒时有原图可对照排查
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: debug-dump
