@@ -139,6 +139,7 @@ Set-GhSecret "CSDN_COOKIES" (Get-Content $cookieFile -Raw).Trim()
 Ok "CSDN Cookie 完成（寿命数月；如配置了通知渠道，过期时会收到提醒）"
 
 # ── [5/6] 通知 ───────────────────────────────────────────────
+$notifyStatus = "未配置"
 Step 5 "通知配置（出事时通过所选渠道提醒你；强烈建议配）"
 Write-Host @"
 通知后端选择:
@@ -150,27 +151,38 @@ $backend = Read-Host "选择 (默认 1)"
 if ($backend -eq "") { $backend = "1" }
 if ($backend -eq "1") {
     Write-Host "需要: 一台跑 OpenClaw 的服务器 + 公网可达的 /v1/chat/completions 端点 + basic auth bot 账号。"
+    Write-Host "三个值将以 Secrets 形式存入你的仓库，Actions 运行时作为环境变量生效，无需 config.toml。"
     Write-Host "接线步骤已写在: docs/SETUP.md 的「OpenClaw 网关通知」一节（也可按 Ctrl+点击打开 GitHub 上此文件）"
     Start-Process "https://github.com/$UPSTREAM/blob/main/docs/SETUP.md" 2>$null
     $ocUrl  = Read-Host "chatCompletions 完整 URL (如 https://你的域名或IP:端口/v1/chat/completions)"
     $ocUser = Read-Host "basic auth 用户名"
     $ocPass = Read-Host "basic auth 密码"
-    Set-GhSecret "NOTIFY_OPENCLAW_URL"      $ocUrl
-    Set-GhSecret "NOTIFY_OPENCLAW_USER"     $ocUser
-    Set-GhSecret "NOTIFY_OPENCLAW_PASSWORD" $ocPass
-    $ans = Read-Host "发一条测试通知验证链路? agent 会真发微信给你 (默认 N)"
-    if ($ans -match "^[yY]") {
-        try {
-            $auth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${ocUser}:${ocPass}"))
-            $r = Invoke-RestMethod -Method Post -Uri $ocUrl -Headers @{ Authorization = "Basic $auth" } `
-                -ContentType "application/json" -TimeoutSec 90 `
-                -Body (@{ model = "openclaw"; messages = @(@{ role = "user"; content = "自动化安装测试:请用微信消息工具发送【free-renew 安装成功】然后只回复:已发送" }) } | ConvertTo-Json -Depth 5)
-            Ok "请求已投出（agent 异步执行，微信以实际收到为准；网关超时也不影响送达）"
-        } catch { Warn "请求异常 $($_.Exception.Message)——若为超时，agent 可能仍在执行，稍后查微信" }
+    if ([string]::IsNullOrWhiteSpace($ocUrl) -or [string]::IsNullOrWhiteSpace($ocUser) -or [string]::IsNullOrWhiteSpace($ocPass)) {
+        Warn "URL/用户名/密码存在空值——空配置不会生效，本次已跳过通知写入。可重跑向导或手动 gh secret set"
+    } else {
+        Set-GhSecret "NOTIFY_OPENCLAW_URL"      $ocUrl
+        Set-GhSecret "NOTIFY_OPENCLAW_USER"     $ocUser
+        Set-GhSecret "NOTIFY_OPENCLAW_PASSWORD" $ocPass
+        $notifyStatus = "OpenClaw→微信（Secrets 已写入）"
+        $ans = Read-Host "发一条测试通知验证链路? agent 会真发微信给你 (默认 N)"
+        if ($ans -match "^[yY]") {
+            try {
+                $auth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${ocUser}:${ocPass}"))
+                $r = Invoke-RestMethod -Method Post -Uri $ocUrl -Headers @{ Authorization = "Basic $auth" } `
+                    -ContentType "application/json" -TimeoutSec 90 `
+                    -Body (@{ model = "openclaw"; messages = @(@{ role = "user"; content = "自动化安装测试:请用微信消息工具发送【free-renew 安装成功】然后只回复:已发送" }) } | ConvertTo-Json -Depth 5)
+                Ok "请求已投出（agent 异步执行，微信以实际收到为准；网关超时也不影响送达）"
+            } catch { Warn "请求异常 $($_.Exception.Message)——若为超时，agent 可能仍在执行，稍后查微信" }
+        }
     }
 } elseif ($backend -eq "2") {
     $wh = Read-Host "Webhook URL"
-    if ($wh) { Set-GhSecret "NOTIFY_WEBHOOK_URL" $wh }
+    if (-not [string]::IsNullOrWhiteSpace($wh)) {
+        Set-GhSecret "NOTIFY_WEBHOOK_URL" $wh
+        $notifyStatus = "Webhook（Secret 已写入）"
+    } else {
+        Warn "Webhook URL 为空，本次未配置。日后可手动设置 Secret NOTIFY_WEBHOOK_URL"
+    }
 } else {
     Warn "已跳过通知。出事时仅 Actions 页可见红叉——建议日后补配 NOTIFY_* Secrets"
 }
@@ -192,7 +204,7 @@ Write-Host "三丰云:   $(Mask $sfUser)"
 Write-Host "阿贝云:   $(Mask $abUser)"
 Write-Host "LLM:      $llmModel @ $($llmBase)"
 Write-Host "CSDN:     Cookie 已入 Secrets"
-Write-Host "通知:     $(if ($backend -eq '1') { 'OpenClaw→微信' } elseif ($backend -eq '2') { 'Webhook' } else { '未配置' })"
+Write-Host "通知:     $notifyStatus"
 Write-Host "定时:     每天 $t:30 北京时间"
 Write-Host ""
 $ans = Read-Host "确认部署? (Y/n)"
