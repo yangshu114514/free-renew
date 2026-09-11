@@ -77,31 +77,40 @@ impl CloudClient {
         urls
     }
 
-    /// 对每个候选端点现构请求体（multipart 的 Form 不可 Clone，不能 build 一次再 clone）
+    /// 对每个候选端点现构请求体（multipart 的 Form 不可 Clone，不能 build 一次再 clone）。
+    /// 外层带重试：Actions(Azure) → 中国 IDC 的线路抖动率很高，一次失败不能定生死。
+    /// 总尝试 = 2 轮 × 候选端点数，轮间隔 5s/15s。
     fn post_with<F>(&self, url: &str, build: F) -> Result<String>
     where
         F: Fn(&str) -> reqwest::blocking::RequestBuilder,
     {
         let origin = site_origin(url);
         let mut last_err: Option<anyhow::Error> = None;
-        for u in self.candidate_urls(url) {
-            let resp = build(&u)
-                .header(USER_AGENT, crate::http::BROWSER_UA)
-                .header(REFERER, format!("{origin}/"))
-                .header(ORIGIN, origin.clone())
-                .header(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.8")
-                .timeout(Duration::from_secs(30))
-                .send();
-            match resp {
-                Ok(r) if r.status().as_u16() == 200 => {
-                    let text = r.text().context("读取响应体失败")?;
-                    return Ok(decode_text(&text));
-                }
-                Ok(r) => {
-                    last_err = Some(anyhow!("HTTP {}: {u}", r.status()).context("非 200 响应"));
-                }
-                Err(e) => {
-                    last_err = Some(anyhow!(e).context(format!("请求失败: {u}")));
+        let backoffs = [0u64, 5, 15];
+        for (round, backoff) in backoffs.iter().enumerate() {
+            if *backoff > 0 {
+                tracing::warn!("请求重试 第{}轮（{backoff}s 后）: {url}", round + 1);
+                std::thread::sleep(Duration::from_secs(*backoff));
+            }
+            for u in self.candidate_urls(url) {
+                let resp = build(&u)
+                    .header(USER_AGENT, crate::http::BROWSER_UA)
+                    .header(REFERER, format!("{origin}/"))
+                    .header(ORIGIN, origin.clone())
+                    .header(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.8")
+                    .timeout(Duration::from_secs(30))
+                    .send();
+                match resp {
+                    Ok(r) if r.status().as_u16() == 200 => {
+                        let text = r.text().context("读取响应体失败")?;
+                        return Ok(decode_text(&text));
+                    }
+                    Ok(r) => {
+                        last_err = Some(anyhow!("HTTP {}: {u}", r.status()).context("非 200 响应"));
+                    }
+                    Err(e) => {
+                        last_err = Some(anyhow!(e).context(format!("请求失败: {u}")));
+                    }
                 }
             }
         }
