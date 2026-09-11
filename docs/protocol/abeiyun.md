@@ -67,3 +67,4 @@ multipart: cmd=free_delay_add, ptype=vps, url={文章URL}, yanqi_img={截图}
 
 免费服务器有效期 5 天，到期前可续（实测 `next_time` 给出精确到秒的可续时刻）。
 官方规则（content_1155）：在论坛/社区发体验帖 + 截图提交审核，可无限次续期。
+

@@ -55,8 +55,8 @@ tag = "renewal"
 # URL 形如 https://<你的网关域名>/v1/chat/completions
 # 需要：网关开启 http.endpoints.chatCompletions + lighttpd /v1/ 段 basic auth 用户
 [notify.openclaw]
-url = "https://shuyang.cc.cd/v1/chat/completions"
-basic_user = "freerenew"
+url = "https://<你的网关域名>/v1/chat/completions"
+basic_user = "<bot用户名>"
 basic_password = "..."          # 或环境变量 NOTIFY_OPENCLAW_PASSWORD
 model = "openclaw"              # 固定值：网关按 agent 路由到其配置的模型
 
@@ -64,3 +64,4 @@ model = "openclaw"              # 固定值：网关按 agent 路由到其配置
 [limits]
 article_ready_timeout = 300    # 等文章可访问的超时（秒）
 http_timeout = 30              # 单请求超时（秒）
+
