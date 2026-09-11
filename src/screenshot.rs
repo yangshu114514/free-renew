@@ -72,7 +72,7 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path) -> Result<PathBuf> {
     //    注意：本地网络可能经梯子，探测结果不可作准；Actions 环境才是准数。
     tab.enable_stealth_mode()
         .context("注入 stealth 反检测脚本失败")?;
-    tab.set_user_agent(crate::http::BROWSER_UA, Some("zh-CN,zh;q=0.9".into()), Some("Win32".into()))
+    tab.set_user_agent(crate::http::BROWSER_UA, Some("zh-CN,zh;q=0.9"), Some("Win32"))
         .context("设置 UA 覆盖失败")?;
     tracing::info!("已启用 stealth 模式 + UA 覆盖");
 
@@ -101,7 +101,7 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path) -> Result<PathBuf> {
     }
 
     // Cookie 头合并：登录 Cookie + acw（挑战解出的）
-    let mut headers = build_cookie_header(acw.as_deref());
+    let headers = build_cookie_header(acw.as_deref());
     if headers.is_empty() {
         // 无任何 Cookie 可注入：仍设置一个空 map 会覆盖 UA 等，跳过
     } else {
