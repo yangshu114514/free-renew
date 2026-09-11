@@ -41,6 +41,21 @@ jobs:
       - name: Build (release)
         run: cargo build --release --locked
 
+      # 诊断步骤：runner 侧直接实测 LLM 连通性（值被 GitHub 自动打码，长度可读）。
+      # 用于定位 401 类问题：区分“Secret 为空/带脏字符”与“厂商侧拒绝”。
+      - name: Preflight — LLM connectivity
+        run: |
+          echo "LLM_BASE_URL = $LLM_BASE_URL"
+          echo "LLM_MODEL    = $LLM_MODEL"
+          echo "LLM_API_KEY  length = ${#LLM_API_KEY}"
+          CODE=$(curl -s -o /tmp/llm.json -w "%{http_code}" -m 60 \
+            -X POST "$LLM_BASE_URL/chat/completions" \
+            -H "Authorization: Bearer $LLM_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"model\":\"$LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ok\"}],\"max_tokens\":5}")
+          echo "Agnes HTTP $CODE"
+          head -c 300 /tmp/llm.json || true
+
       - name: Run renewal
         env:
           # 云账号（环境变量优先级高于 config.toml）
