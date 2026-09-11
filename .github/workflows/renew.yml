@@ -9,6 +9,10 @@ on:
         description: "可选：只验证截图链路（填一个 CSDN 文章 URL），跳过续期流程"
         required: false
         default: ""
+      test_screenshot_title:
+        description: "可选：截图验证的文章标题关键词（留空则只防挑战页，不校验标题）"
+        required: false
+        default: ""
 
 # 防止 GitHub 60 天无 activity 自动停用 scheduled workflow：
 # keepalive-workflow 自动判断最后 commit 是否接近停用阈值，未到则 skip，
@@ -88,12 +92,13 @@ jobs:
         run: |
           if [ -n "$TEST_SCREENSHOT_URL" ]; then
             echo "[test mode] 只验证截图链路: $TEST_SCREENSHOT_URL"
-            ./target/release/free-renew --test-screenshot "$TEST_SCREENSHOT_URL"
+            ./target/release/free-renew --test-screenshot "$TEST_SCREENSHOT_URL" "$TEST_SCREENSHOT_TITLE"
           else
             ./target/release/free-renew
           fi
         env:
           TEST_SCREENSHOT_URL: ${{ inputs.test_screenshot_url }}
+          TEST_SCREENSHOT_TITLE: ${{ inputs.test_screenshot_title }}
 
       - name: Upload run logs
         if: always()
