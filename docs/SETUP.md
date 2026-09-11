@@ -6,7 +6,7 @@
 
 | 需要 | 说明 | 检查命令 |
 |---|---|---|
-| Rust 工具链 | 只在开发机需要；纯部署可跳过（见 §3 用 Actions 远程构建） | `cargo --version` |
+| Rust 工具链 | 只在开发机需要；纯部署可跳过（GitHub Actions 每次运行时远程构建） | `cargo --version` |
 | Git | 已登录（https 方式需 credential manager，ssh 需 key） | `git --version` |
 | GitHub CLI（可选） | 直传 Secrets 用；没有就手动网页配置 | `gh auth status` |
 | 云账号 | 阿贝云 / 三丰云 控制台账密 | — |

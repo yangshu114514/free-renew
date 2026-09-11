@@ -6,7 +6,8 @@ on:
   workflow_dispatch: # 手动点火（Actions 页面按钮）
 
 # 防止 GitHub 60 天无 activity 自动停用 scheduled workflow：
-# 最后 commit 满 45 天时由 keepalive-workflow 自动追加一个 no-op commit 保活
+# keepalive-workflow 自动判断最后 commit 是否接近停用阈值，未到则 skip，
+# 到了才追加一个 no-op commit 保活
 # https://github.com/marketplace/actions/keepalive-workflow
 # 顶层权限收紧为 read；keepalive job 内部单独提权 write
 permissions:
@@ -14,7 +15,7 @@ permissions:
 
 jobs:
   keepalive:
-    # 与续期并行；action 内部自判：最后 commit < 45 天时直接 skip
+    # 与续期并行；action 内部自判：未接近停用阈值时直接 skip
     # continue-on-error：保活失败（如 API 限流）不应污染整轮结论——
     # 红叉必须只表示“续期本身出问题”
     if: ${{ github.event_name == 'schedule' }}
@@ -70,7 +71,7 @@ jobs:
             -H "Authorization: Bearer $LLM_API_KEY" \
             -H "Content-Type: application/json" \
             -d "{\"model\":\"$LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ok\"}],\"max_tokens\":5}")
-          echo "Agnes HTTP $CODE"
+          echo "LLM HTTP $CODE"
           head -c 300 /tmp/llm.json || true
 
       - name: Run renewal
