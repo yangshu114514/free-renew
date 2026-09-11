@@ -30,8 +30,8 @@ pub const DEFAULT_ANGLES: &[&str] = &[
     "写它家控制台/工单/文档的使用体验",
 ];
 
-/// 默认目标字数池
-pub const DEFAULT_LENGTHS: &[usize] = &[300, 420, 500, 380];
+/// 默认目标字数池（2026-09-12 起加长：实测 418 字偏短，审核观感单薄）
+pub const DEFAULT_LENGTHS: &[usize] = &[500, 650, 800, 600];
 
 pub struct Article {
     pub title: String,

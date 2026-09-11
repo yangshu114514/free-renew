@@ -4,9 +4,11 @@
 //! （`oo` 十六进制数组 + 位运算变换）。脚本执行后向 document.cookie 种入
 //! `acw_sc__v2=...`，随后 location.reload()。携带该 Cookie 的后续请求放行。
 //!
-//! 求解方式：把挑战脚本丢进 Node.js 沙箱（Actions 预装 Node 20），用
-//! document/location 桩捕获 Cookie。纯本地执行，脚本内容来自厂商服务器，
-//! 不外发任何数据。本地运行需 Node；无 Node 时该降级路径不可用（报错清晰）。
+//! 求解方式：把挑战脚本丢进 Node.js（Actions 预装 Node 20）用
+//! document/location 桩捕获 Cookie。诚实说明：Node 进程默认具备网络访问
+//! 能力，本求解器未做网络隔离——挑战脚本实测只做本地计算，但若厂商
+//! 在挑战脚本里夹带外发行为，这里拦不住。本地运行需 Node；无 Node 时
+//! 该降级路径不可用（报错清晰）。
 
 use anyhow::{bail, Context, Result};
 
