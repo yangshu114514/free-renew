@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  CSDN Cookie 刷新（free-renew 日常维护，目标 30 秒）
+  CSDN Cookie 刷新（free-renew 日常维护；登录态存活时约 30 秒，需重新扫码则更久）
 
 .DESCRIPTION
   原理：用本机 Chrome/Edge 开一个"专用 profile + 远程调试端口"的窗口。
@@ -32,11 +32,10 @@ $browser = @(
 if (-not $browser) { Write-Host "ERR: 找不到 Chrome/Edge"; exit 1 }
 Write-Host "[1/4] 浏览器: $browser"
 
-# ── HTTP CDP 辅助(只用 /json 端点 + Page.navigate 走 WS) ─────
+# ── HTTP CDP 辅助(只用 /json 端点 + 命令走 WebSocket) ────────
 # 说明: cookie 读取若走 WS 会引入不稳定的接收循环; 这里用
-# chrome://version 不可行, 改用最简方案: 专门起一个 headless 进程
-# 临时复用同一 profile 目录读取 cookie? 也不行(profile 被锁)。
-# → 最终方案: 用 WebView2/DevTools 协议中已验证稳定的 WS 客户端。
+# 原生 .NET WebSocket 客户端(System.Net.WebSockets), 每次调用
+# 收满一个完整消息即返回。
 $wsClientCode = @'
 using System;
 using System.Net.WebSockets;
