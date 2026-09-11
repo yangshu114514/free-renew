@@ -22,7 +22,9 @@ pub static CLOUDS: &[CloudProfile] = &[
         name: "三丰云",
         login_url: "https://api.sanfengyun.com/www/login.php",
         renew_url: "https://api.sanfengyun.com/www/renew.php",
-        allow_http_fallback: false,
+        // 2026-09-11 Actions 实测：Azure→sanfengyun HTTPS 会整段抖掉（连接层失败），
+        // 与阿贝云同款降级策略，提高境外存活率
+        allow_http_fallback: true,
     },
     CloudProfile {
         key: "abeiyun",
