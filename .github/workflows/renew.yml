@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "30 1 * * *" # 每天 09:30 北京时间；程序内部判断是否到期，幂等
   workflow_dispatch: # 手动点火（Actions 页面按钮）
+    inputs:
+      test_screenshot_url:
+        description: "可选：只验证截图链路（填一个 CSDN 文章 URL），跳过续期流程"
+        required: false
+        default: ""
 
 # 防止 GitHub 60 天无 activity 自动停用 scheduled workflow：
 # keepalive-workflow 自动判断最后 commit 是否接近停用阈值，未到则 skip，
@@ -56,6 +61,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2 # 冷构建 ~4min，热构建 ~40s
 
+      # ubuntu runner 只有西文字体，不装 CJK 字体的话 headless Chrome
+      # 会把中文全部渲染成豆腐块 □□□（2026-09-12 实测交出过一张全是方块的截图）
+      - name: Install CJK fonts
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
+
       - name: Build (release)
         run: cargo build --release --locked
 
@@ -75,7 +85,15 @@ jobs:
           head -c 300 /tmp/llm.json || true
 
       - name: Run renewal
-        run: ./target/release/free-renew
+        run: |
+          if [ -n "$TEST_SCREENSHOT_URL" ]; then
+            echo "[test mode] 只验证截图链路: $TEST_SCREENSHOT_URL"
+            ./target/release/free-renew --test-screenshot "$TEST_SCREENSHOT_URL"
+          else
+            ./target/release/free-renew
+          fi
+        env:
+          TEST_SCREENSHOT_URL: ${{ inputs.test_screenshot_url }}
 
       - name: Upload run logs
         if: always()
@@ -87,7 +105,8 @@ jobs:
           retention-days: 30
 
       - name: Upload debug artifacts on failure
-        if: failure()
+        # 失败时，或截图验证模式（无论成败）都上传：截图就是验证产物
+        if: failure() || (github.event_name == 'workflow_dispatch' && inputs.test_screenshot_url != '')
         uses: actions/upload-artifact@v4
         with:
           name: debug-dump
