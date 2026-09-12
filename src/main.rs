@@ -5,10 +5,13 @@
 //!
 //! 流程（每天被 Actions cron 拉起，幂等）：
 //! login API → check_free_delay → [未到期/审核中] 退出 / [到期]
-//! → LLM 写文章 → CSDN 发布 → 截图 → multipart 提交 free_delay_add → 失败通知
+//! → LLM 写文章 → 发布到内容平台(CSDN/知乎) → 截图 → multipart 提交续期 → 失败通知
 //!
 //! 配置优先级：环境变量 > config.toml > 内置默认（见 config.rs）。
 //! 日志：终端单行 + JSONL 落盘（logs/ 或 FREE_RENEW_LOG_DIR），见 logging.rs。
+
+// 本 crate 不含 unsafe 代码；禁用以防未来无意引入 UB（严格性闸门之一）。
+#![forbid(unsafe_code)]
 
 mod cloud;
 mod config;
