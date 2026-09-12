@@ -21,6 +21,18 @@ on:
         description: "可选：填厂商名只生成文章样文输出到日志（不发文不碰知乎），验内容质量用；优先级高于 test_zhihu"
         required: false
         default: ""
+      submit_existing:
+        description: "可选：填已发布文章的 URL——复用该文章只重试'截图+提交厂商'，绝不重新发文（治提交阶段网络抖动）"
+        required: false
+        default: ""
+      submit_vendor:
+        description: "submit_existing 对应厂商（三丰云/阿贝云），默认三丰云"
+        required: false
+        default: "三丰云"
+      submit_title:
+        description: "submit_existing 文章标题关键词（截图校验用，可留空）"
+        required: false
+        default: ""
 
 # 防止 GitHub 60 天无 activity 自动停用 scheduled workflow：
 # keepalive-workflow 自动判断最后 commit 是否接近停用阈值，未到则 skip，
@@ -103,7 +115,10 @@ jobs:
 
       - name: Run renewal
         run: |
-          if [ -n "$TEST_WRITE" ]; then
+          if [ -n "$SUBMIT_EXISTING" ]; then
+            echo "[submit-existing] 复用已发布文章，只重试截图+提交（不重新发文）: $SUBMIT_EXISTING"
+            ./target/release/free-renew --submit-existing "$SUBMIT_VENDOR" "$SUBMIT_EXISTING" "$SUBMIT_TITLE"
+          elif [ -n "$TEST_WRITE" ]; then
             echo "[test mode] 只生成样文验内容质量: vendor=$TEST_WRITE"
             ./target/release/free-renew --test-write "$TEST_WRITE"
           elif [ -n "$TEST_ZHIHU" ]; then
@@ -120,6 +135,9 @@ jobs:
           TEST_SCREENSHOT_TITLE: ${{ inputs.test_screenshot_title }}
           TEST_ZHIHU: ${{ inputs.test_zhihu }}
           TEST_WRITE: ${{ inputs.test_write }}
+          SUBMIT_EXISTING: ${{ inputs.submit_existing }}
+          SUBMIT_VENDOR: ${{ inputs.submit_vendor }}
+          SUBMIT_TITLE: ${{ inputs.submit_title }}
 
       - name: Upload run logs
         if: always()
