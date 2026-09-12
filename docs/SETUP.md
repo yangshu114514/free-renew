@@ -109,7 +109,7 @@ Linux/macOS：`cargo run --release --bin csdn_cookie_export`，把打印的单�
 
 （想只看生成质量、连草稿都不建：`test_write` 填厂商名，样文打进日志。）
 
-正式点火：Actions → free-server-renewal → Run workflow。首次含 Linux 编译约 4 分钟。绿了之后，按仓库 cron（默认每天 09:30 北京时间）自动检查；没到期 4 秒退出。
+正式点火：Actions → free-server-renewal → Run workflow。首次含 Linux 编译约 4 分钟。绿了之后，按仓库 cron（默认每天 09:30 北京时间）自动检查；没到期几秒退出。
 
 ---
 

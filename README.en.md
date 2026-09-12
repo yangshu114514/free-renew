@@ -54,7 +54,7 @@ The dedicated browser profile usually keeps you logged in — the script re-expo
 | [docs/protocol/](docs/protocol/) | technical details: Sanfengyun/Abeiyun `cmd=` protocol, CSDN signing, Zhihu publish API (verified samples) |
 | [NOTICE](NOTICE) | third-party attribution |
 
-Architecture in one sentence: **GitHub Actions runs this repo's Rust binary daily** — vendor API login + status check (exits in seconds when not due); when due, an LLM writes a unique-angle experience article (machine-validated against banned words / required keywords / AI-tone heuristics), publishes it to the chosen content platform (CSDN or Zhihu), screenshots the page, and submits to the vendor's review queue. Scheduled workflows get disabled by GitHub after 60 days of repo inactivity — [keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow) is built in to prevent that.
+Architecture in one sentence: **GitHub Actions runs this repo's Rust binary daily** — vendor API login + status check (exits in seconds when not due); when due, an LLM writes a unique-angle experience article (machine-validated against banned words / required keywords / AI-tone heuristics / content-safety red-lines), publishes it to the chosen content platform (CSDN or Zhihu), screenshots the page, and submits to the vendor's review queue. Scheduled workflows get disabled by GitHub after 60 days of repo inactivity — [keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow) is built in to prevent that.
 
 ## Acknowledgments
 
@@ -66,6 +66,7 @@ Other direct credits (full list in NOTICE):
 - **[rust-headless-chrome](https://github.com/rust-headless-chrome/rust-headless-chrome)** (MIT) - CDP client; the screenshot anti-detection capability (webdriver/chrome/plugins/permissions/webgl bypass) comes from its built-in enable_stealth_mode().
 - **[gautamkrishnar/keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow)** (MIT) - prevents GitHub's 60-day auto-disable of scheduled workflows.
 - CSDN x-ca signing constants: public constants embedded in CSDN's own frontend JS, as documented in community articles.
+- Zhihu publish flow: modeled on community HTTP implementations such as [zimya/zhihu_obsidian](https://github.com/zimya/zhihu_obsidian) (0BSD) — the create-draft → PATCH-content → attach-topic → publish endpoints, which need no x-zse-96 signing. Independent Rust implementation, no code copied (see NOTICE).
 - Sanfengyun official help documents (content_1009 / content_1156) - source of the review red lines.
 - NodeLoc / CSDN community threads - vendor review failure-mode intel.
 

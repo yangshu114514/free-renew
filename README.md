@@ -59,7 +59,7 @@ Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.m
 | [config.example.toml](config.example.toml) | 全部配置项及注释（LLM 词表/角度池/禁词均可自定义） |
 | [NOTICE](NOTICE) | 第三方归属声明 |
 
-架构一句话：**GitHub Actions 每天跑一次本仓库的 Rust 二进制**——登录云厂商查状态，没到期几秒退出；到期则 LLM 生成一篇随机角度、经禁词/必含词/AI 腔机器校验的体验文章，发布到所选内容平台（CSDN 或知乎），截图后提交给厂商审核，成功或失败都会通过已配置的通知渠道告警（OpenClaw→微信 / 通用 Webhook，可选）。60 天仓库无提交会导致定时任务被 GitHub 停用，已内置 [keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow) 自动保活。
+架构一句话：**GitHub Actions 每天跑一次本仓库的 Rust 二进制**——登录云厂商查状态，没到期几秒退出；到期则 LLM 生成一篇随机角度、经禁词/必含词/AI 腔/**内容审核红线**机器校验的体验文章，发布到所选内容平台（CSDN 或知乎），截图后提交给厂商审核，成功或失败都会通过已配置的通知渠道告警（OpenClaw→微信 / 通用 Webhook，可选）。60 天仓库无提交会导致定时任务被 GitHub 停用，已内置 [keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow) 自动保活。
 
 ## 致谢
 
@@ -70,6 +70,7 @@ Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.m
 - **[rust-headless-chrome](https://github.com/rust-headless-chrome/rust-headless-chrome)**（MIT）——Chrome DevTools Protocol 客户端。文章页截图的反检测能力（webdriver/chrome/plugins/permissions/webgl 五件套）来自其内置 `enable_stealth_mode()`。
 - **[gautamkrishnar/keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow)**（MIT）——防止 GitHub 60 天无活动自动停用定时任务。
 - **CSDN 签名常量**（x-ca-key / appSecret）出自 CSDN 前端 JS 内嵌的公开常量，社区解析见[腾讯云社区文章](https://cloud.tencent.com/developer/article/2420128)。
+- **知乎发文流程**参考 [zimya/zhihu_obsidian](https://github.com/zimya/zhihu_obsidian)（0BSD）等社区实现的纯 HTTP 链路（建草稿→写正文→挂话题→发布，无需 x-zse-96 签名）；本项目独立用 Rust 实现，未复制源码，详见 [NOTICE](NOTICE)。
 - **三丰云官方帮助文档**（content_1009 / content_1156）——审核红线条目的出处。
 - **NodeLoc / CSDN 社区帖子**——厂商审核失败模式与免费服务器生态的情报来源。
 
