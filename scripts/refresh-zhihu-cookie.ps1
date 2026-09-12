@@ -92,7 +92,15 @@ function Invoke-Cdp {
     param($Ws, [ref]$CidRef, [string]$Method, [string]$ParamsJson = $null)
     $CidRef.Value++
     $cdpType = $TypeName -as [type]
-    $raw = $cdpType::CallAsync($Ws, $CidRef.Value, $Method, $ParamsJson, $CdpTimeoutMs).GetAwaiter().GetResult()
+    try {
+        $raw = $cdpType::CallAsync($Ws, $CidRef.Value, $Method, $ParamsJson, $CdpTimeoutMs).GetAwaiter().GetResult()
+    } catch {
+        # .GetResult() 抛的是 MethodInvocationException→AggregateException 套娃，
+        # 必须剥到最内层才有可读根因（如"浏览器窗口被关了"）。
+        $ex = $_.Exception
+        while ($ex.InnerException) { $ex = $ex.InnerException }
+        throw "CDP ${Method} 失败（浏览器被关闭/失联？）: $($ex.Message)"
+    }
     $obj = $raw | ConvertFrom-Json
     if ($obj.error) { throw "CDP ${Method} 返回错误: $($obj.error.code) $($obj.error.message)" }
     return $obj

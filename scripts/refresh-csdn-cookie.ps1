@@ -100,7 +100,16 @@ function Invoke-Cdp {
     param($Ws, [ref]$CidRef, [string]$Method, [string]$ParamsJson = $null)
     $CidRef.Value++
     $cdpType = $TypeName -as [type]
-    $raw = $cdpType::CallAsync($Ws, $CidRef.Value, $Method, $ParamsJson, $CdpTimeoutMs).GetAwaiter().GetResult()
+    try {
+        $raw = $cdpType::CallAsync($Ws, $CidRef.Value, $Method, $ParamsJson, $CdpTimeoutMs).GetAwaiter().GetResult()
+    } catch {
+        # .GetResult() 抛出来的是 MethodInvocationException→AggregateException 套娃，
+        # 原样上屏只有一句"一个或多个错误"。剥到最内层，让"浏览器窗口被关了"这类
+        # 根因直接可读（实测：人工关掉弹窗后满屏堆栈，没人看得出发生了什么）。
+        $ex = $_.Exception
+        while ($ex.InnerException) { $ex = $ex.InnerException }
+        throw "CDP ${Method} 失败（浏览器被关闭/失联？）: $($ex.Message)"
+    }
     $obj = $raw | ConvertFrom-Json
     # CDP 的错误是**响应体里的 error 字段**，不是 HTTP 异常；不查它就会把
     # "method not found" 之类当成"没有 cookie"，然后一直等到超时。
@@ -191,8 +200,10 @@ $ws.Dispose()
 
 Write-Host ""
 Write-Host "OK: $($cookies.Count) 条 Cookie → $OutFile"
-$ut = $cookies | Where-Object { $_.name -eq "UserToken" }
-if ($ut -and $ut.expires) {
+$ut = @($cookies | Where-Object { $_.name -eq "UserToken" -and $_.expires -gt 0 }) | Select-Object -First 1
+# expires>0 才打印：session 级 cookie 的 expires 是 -1，FromUnixTimeSeconds(-1)
+# 会显示"有效期至 1970-01-01"，看着像马上过期实则没有过期概念（注入测试实测暴露）
+if ($ut) {
     try {
         $exp = [DateTimeOffset]::FromUnixTimeSeconds([long]$ut.expires).LocalDateTime
         Write-Host "   UserToken 有效期至: $exp"
