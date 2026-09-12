@@ -6,7 +6,7 @@ Auto-renewal for the "permanently free cloud servers" of Abeiyun (阿贝云) and
 
 > ⚠️ **Disclaimer**: for learning and personal technical research only. Whether vendor terms permit such automation is your call; all consequences (account suspension, instance reclamation, data loss) are borne by the user. Full terms at the end of this page.
 
-## Install in 3 steps
+## Install
 
 Requires [Git](https://git-scm.com/) + [GitHub CLI](https://cli.github.com/) (`gh auth login`):
 
@@ -15,7 +15,7 @@ Requires [Git](https://git-scm.com/) + [GitHub CLI](https://cli.github.com/) (`g
 irm https://raw.githubusercontent.com/yangshu114514/free-renew/main/install.ps1 | iex
 ```
 
-The wizard asks 6 questions: cloud account passwords → LLM API (optional test) → **choose publish platform (CSDN/Zhihu) and capture its cookie** → notification method → daily schedule (default 09:30 CST) → confirm. About 5 minutes total.
+The wizard runs 6 steps: repo → cloud account passwords → LLM API (optional test) → **choose publish platform (CSDN/Zhihu) and capture its cookie** → notification method → daily schedule (default 09:30 CST) + confirm. About 5 minutes. Preview safely first with `.\install.ps1 -DryRun` (writes nothing).
 
 Linux/macOS or manual route: clone the repo and follow [docs/SETUP.md](docs/SETUP.md).
 
@@ -36,6 +36,15 @@ When the publish cookie expires (weeks to months; you'll be notified if a notify
 ```
 
 The dedicated browser profile usually keeps you logged in — the script re-exports the cookie automatically and optionally pushes it to GitHub Secrets. 30 seconds.
+
+## Content safety & recovery
+
+- **Content red-line**: the generator hard-rejects review landmine terms (VPN/circumvention, intranet tunneling, no-ICP-filing, gray-industry, politics, …). A hit triggers a rewrite; repeated hits **abort the run rather than publish** — better to skip a renewal than post borderline content that could strike your platform account.
+- **Publish → screenshot waits for the article to go public**: Zhihu/CSDN newly-published posts are briefly invisible; the screenshot step polls until it's live, so a login-wall page is never submitted as a "screenshot".
+- **`--submit-existing`**: if publishing succeeded but only the "upload screenshot to vendor" POST died on network flakiness, reuse the already-published article to retry screenshot+submit **without re-posting** — no extra articles spamming your account.
+- Diagnostic entry points (`--test-write` / `--test-zhihu` / screenshot test / the recovery above) are documented in [docs/SETUP.md](docs/SETUP.md) → "手动触发与故障恢复".
+
+> The installer supports a `-DryRun` preview: `.\install.ps1 -DryRun` prints what it would do without forking, writing secrets, or triggering the workflow.
 
 ## Documentation
 
