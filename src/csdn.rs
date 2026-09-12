@@ -136,8 +136,6 @@ impl CsdnClient {
     }
 }
 
-/// markdown → 简易 HTML。CSDN content 字段要 HTML；markdowncontent 字段原样。
-/// 只处理续期文章用到的子集：标题、代码块、段落。
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -76,7 +76,7 @@ impl ZhihuClient {
     /// 统一带知乎写接口所需头部。
     fn req(&self, method: reqwest::Method, url: &str) -> reqwest::blocking::RequestBuilder {
         self.http
-            .request(method.clone(), url)
+            .request(method, url)
             .header("Cookie", &self.cookie)
             .header("User-Agent", crate::http::BROWSER_UA)
             .header("Accept", "application/json, text/plain, */*")
@@ -268,6 +268,10 @@ fn read(resp: reqwest::blocking::Response) -> Result<(u16, String)> {
 }
 
 /// 风控/验证码识别：命中即硬错误（绝不重试猛戳）。
+///
+/// 只认**确定**的验证标识。曾用裸子串 `"verify"`，但知乎正常响应里本就带
+/// `is_verified` / `verify_status` 一类字段——一个合法字段就能把整轮发文打断。
+/// 假阳性比漏报更贵：漏报还有 401/403 与鉴权失败兜底，假阳性直接让当轮续期作废。
 fn check_block(status: u16, body: &str) -> Result<()> {
     if status == 403 || status == 401 {
         bail!(
@@ -276,7 +280,7 @@ fn check_block(status: u16, body: &str) -> Result<()> {
             crate::http::truncate_chars(body, 200)
         );
     }
-    if body.contains("验证码") || body.contains("captcha") || body.contains("verify") {
+    if body.contains("验证码") || body.contains("captcha") || body.contains("unhuman") {
         bail!("知乎要求人工验证（captcha）：自动发布已停止，需人工在浏览器完成验证。响应: {}",
             crate::http::truncate_chars(body, 200));
     }
@@ -334,6 +338,9 @@ mod tests {
     fn check_block_detects_captcha() {
         assert!(check_block(200, "{\"err\":\"请通过验证码\"}").is_err());
         assert!(check_block(403, "forbidden").is_err());
+        assert!(check_block(200, "{\"captcha\":{\"token\":\"x\"}}").is_err());
         assert!(check_block(200, "ok").is_ok());
+        // 正常响应里的 verified 字段不得被当成验证挑战（假阳性会废掉整轮发文）
+        assert!(check_block(200, "{\"author\":{\"is_verified\":true}}").is_ok());
     }
 }

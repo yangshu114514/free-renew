@@ -65,6 +65,15 @@ impl RunContext {
     }
 }
 
+/// 调试产物目录（文章全文、截图、页面 HTML）。
+/// 默认 `/tmp/freerenew-debug`；Actions 侧以该目录整体上传 debug-dump artifact。
+/// 唯一实现放这里：发文与截图两处曾各抄一份默认值，改了环境变量名就会有一处漂移。
+pub fn debug_dir() -> PathBuf {
+    PathBuf::from(
+        std::env::var("FREE_RENEW_DEBUG_DIR").unwrap_or_else(|_| "/tmp/freerenew-debug".into()),
+    )
+}
+
 /// 手机号/用户名脱敏：保留前 3 后 2，中间全部替换为 *（个数与原长度一致）。
 pub fn mask_id(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();

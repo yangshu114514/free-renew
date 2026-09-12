@@ -13,7 +13,7 @@ use serde_json::json;
 
 use crate::cloud;
 use crate::config::AppConfig;
-use crate::logging::RunContext;
+use crate::logging::{self, RunContext};
 use crate::{login_cookie, notify, screenshot, writer, zhihu};
 
 /// vendor 位置参数：取 flag 后第一个非 `--` 参数，缺省"三丰云"。
@@ -23,12 +23,6 @@ fn vendor_arg(flag: &str) -> String {
         .and_then(|i| std::env::args().nth(i + 1))
         .filter(|s| !s.starts_with("--"))
         .unwrap_or_else(|| "三丰云".to_string())
-}
-
-fn debug_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(
-        std::env::var("FREE_RENEW_DEBUG_DIR").unwrap_or_else(|_| "/tmp/freerenew-debug".into()),
-    )
 }
 
 fn test_notify(cfg: &AppConfig, run: &RunContext) -> Result<()> {
@@ -58,7 +52,7 @@ fn test_screenshot(cfg: &AppConfig, run: &RunContext) -> Result<()> {
         .nth(pos + 1)
         .ok_or_else(|| anyhow::anyhow!("--test-screenshot 需要一个文章 URL 参数"))?;
     let title = std::env::args().nth(pos + 2).unwrap_or_default();
-    let pic = screenshot::capture(&url, &title, &debug_dir(), login_cookie(cfg))?;
+    let pic = screenshot::capture(&url, &title, &logging::debug_dir(), login_cookie(cfg))?;
     let meta = std::fs::metadata(&pic)?;
     let _ = run; // 截图探测无需落 JSONL 事件
     println!("截图成功: {} ({} bytes)", pic.display(), meta.len());
@@ -76,7 +70,7 @@ fn test_write(cfg: &AppConfig, run: &RunContext) -> Result<()> {
         vendor, article.word_count, article.title, article.body_markdown
     );
     // 全文写成 artifact 文件，供下载后干净查看（不受 Actions 日志行前缀污染）。
-    let dbg = debug_dir();
+    let dbg = logging::debug_dir();
     let _ = std::fs::create_dir_all(&dbg);
     let _ = std::fs::write(
         dbg.join("article-sample.md"),
@@ -142,7 +136,7 @@ fn submit_existing(cfg: &AppConfig, run: &RunContext) -> Result<()> {
     let (state, ..) = client.login_and_check()?;
     tracing::warn!("submit-existing：当前状态 {state:?}（忽略，直接尝试提交现成文章）");
 
-    let dbg = debug_dir();
+    let dbg = logging::debug_dir();
     let pic = screenshot::capture(&url, &title, &dbg, login_cookie(cfg))?;
     let meta = std::fs::metadata(&pic).ok();
     tracing::info!("截图就绪 {} 字节，提交中…", meta.as_ref().map(|m| m.len()).unwrap_or(0));
@@ -168,7 +162,9 @@ fn submit_existing(cfg: &AppConfig, run: &RunContext) -> Result<()> {
 
 /// 命中任一 `--test-*` 子命令 → 执行并返回 true（main 提前退出）；否则 false。
 pub fn run_if_probe(cfg: &AppConfig, run: &RunContext) -> Result<bool> {
-    let has = |f: &str| std::env::args().any(|a| a == f);
+    // 参数收集一次：原先每判定一个子命令就把整个 argv 重新遍历一遍
+    let args: Vec<String> = std::env::args().collect();
+    let has = |f: &str| args.iter().any(|a| a == f);
     if has("--test-notify") { test_notify(cfg, run)?; return Ok(true); }
     if has("--test-screenshot") { test_screenshot(cfg, run)?; return Ok(true); }
     if has("--test-write") { test_write(cfg, run)?; return Ok(true); }
