@@ -6,7 +6,7 @@
 
 > ⚠️ **免责声明**：本工具仅供学习与个人技术研究。厂商条款是否允许此类自动化由你自行判断，使用产生的一切后果（账号封禁/服务器回收/数据丢失）由使用者承担。完整条款见文末。
 
-## 三步安装
+## 安装
 
 本地已装 [Git](https://git-scm.com/) + [GitHub CLI](https://cli.github.com/)（`gh auth login` 过）即可：
 
@@ -15,7 +15,7 @@
 irm https://raw.githubusercontent.com/yangshu114514/free-renew/main/install.ps1 | iex
 ```
 
-向导会问你 6 个问题：云账号密码 → LLM API（可选测试）→ **选发文平台（CSDN/知乎）并采集其 Cookie** → 通知方式 → 每天几点跑 → 确认。全程约 5 分钟。
+向导分 6 步问答：仓库 → 云账号密码 → LLM API（可选测试）→ **选发文平台（CSDN/知乎）并采集其 Cookie** → 通知方式 → 每天几点跑 + 确认。全程约 5 分钟。想先安全预览可跑 `.\install.ps1 -DryRun`（不写任何东西）。
 
 Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.md) 手动走一遍（内容相同，含两个发文平台的采集方式、可选的 OpenClaw 微信通知接线、故障速查表）。
 
@@ -38,6 +38,15 @@ Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.m
 专用浏览器 profile 通常还保持登录态，脚本自动重新导出 Cookie 并可选直传 GitHub Secret，30 秒完事。
 
 其他一切（每日检查、续期提交、失败告警、运行日志）全自动，无需关心。
+
+## 内容安全与故障恢复
+
+- **内容安全红线**：生成端内置审核雷区一票否决（翻墙/内网穿透/免备案/灰产/政治等），命中就重写、连续命中则放弃本轮**绝不发**——宁可不续，也不发一篇可能连累你内容平台账号的擦边文（被真实删稿后加的护栏）。
+- **发文→截图会等文章真正公开**：知乎/CSDN 刚发的文常短时不可见，截图步骤轮询等放行再截，不提交"登录墙"垃圾图。
+- **`--submit-existing`**：发文成功却卡在"上传截图到厂商"的网络抖动时，用已发布文章**只重试截图+提交、不重发**，避免反复灌新文。
+- 诊断入口（`--test-write` / `--test-zhihu` / 截图测试 / 上述恢复）见 [docs/SETUP.md](docs/SETUP.md)「手动触发与故障恢复」。
+
+> 安装脚本支持 `-DryRun` 演练：`.\install.ps1 -DryRun` 只打印将执行的动作，不 fork、不写 Secret、不触发 workflow，可安全预览。
 
 ## 文档
 
