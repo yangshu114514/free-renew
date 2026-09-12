@@ -17,6 +17,7 @@ mod file_config;
 mod http;
 mod logging;
 mod notify;
+mod probe;
 mod screenshot;
 mod waf;
 mod writer;
@@ -226,7 +227,7 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
 /// 截图 Chrome 的登录 Cookie：随发文平台走（知乎文章页用知乎 cookie，CSDN 用 CSDN）。
 /// 唯一来源是 config（config.rs 已合并 env/文件）。截公开文章页本无需登录态，
 /// 注入只为版面一致 + 规避"未登录访客"折叠/挑战。
-fn login_cookie(cfg: &AppConfig) -> Option<&str> {
+pub(crate) fn login_cookie(cfg: &AppConfig) -> Option<&str> {
     let opt = match cfg.platform_provider.as_str() {
         "zhihu" => cfg.zhihu.as_ref().map(|z| z.cookie.as_str()),
         _ => cfg.csdn.as_ref().map(|c| c.cookie.as_str()),
@@ -296,111 +297,9 @@ fn main() -> Result<()> {
 
     let cfg = AppConfig::load(config_path.as_deref());
 
-    // --test-notify 子命令：端到端验证通知链路（正式格式）。
-    // 在云账号检查之前执行：本子命令只需要通知配置，不碰云厂商 API。
-    if std::env::args().any(|a| a == "--test-notify") {
-        if cfg.notify.openclaw.is_none() && cfg.notify.webhook_url.is_empty() {
-            run.event("test_notify", "failed", json!({"reason": "no_notify_backend"}));
-            anyhow::bail!(
-                "通知链路未配置。二选一：环境变量 NOTIFY_OPENCLAW_URL/USER/PASSWORD 三件套（或 NOTIFY_WEBHOOK_URL），\
-                 或 config.toml 的 [notify.openclaw] / [notify].webhook_url"
-            );
-        }
-        let title = "free-renew 通知链路自检";
-        let backend_label = if cfg.notify.openclaw.is_some() {
-            "openclaw（网关 agent → 微信）"
-        } else {
-            "webhook"
-        };
-        let chain = if cfg.notify.openclaw.is_some() {
-            "本工具 → 网关 → agent → 微信"
-        } else {
-            "本工具 → webhook"
-        };
-        let detail = format!(
-            "通知后端: {}\n本轮为人工触发测试，非真实续期。你看到这条消息说明: {} 全链路可用。",
-            backend_label, chain
-        );
-        notify::send(&cfg.notify, title, &detail);
-        run.event("test_notify", "ok", json!({
-            "backend": if cfg.notify.openclaw.is_some() { "openclaw" } else { "webhook" },
-        }));
-        println!(
-            "通知已投递（fire-and-forget），到你的 {} 查收。",
-            if cfg.notify.openclaw.is_some() { "微信" } else { "webhook 接收端" }
-        );
-        return Ok(());
-    }
-
-    // --test-screenshot <url> [title]：单独验证截图链路（WAF 挑战 + Cookie 注入 + 标题渲染）
-    // title 可选：给出则验证页面渲染出了该标题；省略则只防挑战页
-    if let Some(pos) = std::env::args().position(|a| a == "--test-screenshot") {
-        let url = std::env::args()
-            .nth(pos + 1)
-            .ok_or_else(|| anyhow::anyhow!("--test-screenshot 需要一个文章 URL 参数"))?;
-        let title = std::env::args().nth(pos + 2).unwrap_or_default();
-        let debug_dir = std::path::PathBuf::from(
-            std::env::var("FREE_RENEW_DEBUG_DIR").unwrap_or_else(|_| "/tmp/freerenew-debug".into()),
-        );
-        let pic = screenshot::capture(&url, &title, &debug_dir, login_cookie(&cfg))?;
-        let meta = std::fs::metadata(&pic)?;
-        println!("截图成功: {} ({} bytes)", pic.display(), meta.len());
-        return Ok(());
-    }
-
-    // --test-write [vendor]：只生成文章并全文输出（不发文、不碰知乎、不碰厂商），
-    // 供人工验内容质量。--test-zhihu 的前置：先把关文字，再验链路。
-    if std::env::args().any(|a| a == "--test-write") {
-        let Some(llm) = &cfg.llm else {
-            anyhow::bail!("--test-write 需要 LLM（LLM_BASE_URL/LLM_API_KEY/LLM_MODEL）");
-        };
-        let vendor = std::env::args()
-            .position(|a| a == "--test-write")
-            .and_then(|i| std::env::args().nth(i + 1))
-            .filter(|s| !s.starts_with("--"))
-            .unwrap_or_else(|| "三丰云".to_string());
-        let article = writer::generate_article(llm, &vendor)?;
-        println!(
-            "===== 样文（{}，{} 字）=====\n# {}\n\n{}",
-            vendor, article.word_count, article.title, article.body_markdown
-        );
-        run.event("test_write", "ok", json!({"vendor": vendor, "title": article.title, "word_count": article.word_count}));
-        return Ok(());
-    }
-
-    // --test-zhihu [vendor]：知乎发文链路探路（低风控代价）——
-    //   真生成一篇（验证新 prompt）+ 建草稿 + 写正文 + 挂话题，但**不点发布**，
-    //   打印草稿编辑链接给你自己在浏览器看效果。确认鉴权/接口 OK 再切正式 provider。
-    if std::env::args().any(|a| a == "--test-zhihu") {
-        let Some(zh) = &cfg.zhihu else {
-            anyhow::bail!("--test-zhihu 需要知乎 Cookie：设 ZHIHU_COOKIES 环境变量或 config.toml [platform.zhihu]");
-        };
-        let vendor = std::env::args()
-            .position(|a| a == "--test-zhihu")
-            .and_then(|i| std::env::args().nth(i + 1))
-            .filter(|s| !s.starts_with("--"))
-            .unwrap_or_else(|| "三丰云".to_string());
-        let (title, html) = match &cfg.llm {
-            Some(llm) => {
-                let a = writer::generate_article(llm, &vendor)?;
-                println!("生成文章: {} ({} 字)", a.title, a.word_count);
-                (a.title, zhihu::md_to_html(&a.body_markdown))
-            }
-            None => {
-                tracing::warn!("未配置 LLM，用固定样例正文探路（仅验证接口，不验证内容质量）");
-                (
-                    format!("{vendor} 连通性测试草稿"),
-                    "<p>这是一条来自 free-renew 的接口探路草稿，非正式文章，可删。</p>".to_string(),
-                )
-            }
-        };
-        let client = zhihu::ZhihuClient::new(zh)?;
-        let edit = client.publish(&title, &html, &zh.topics, zh.toc, false)?;
-        run.event("test_zhihu", "ok", json!({"vendor": vendor, "draft_edit": edit}));
-        println!(
-            "知乎草稿探路成功（未发布）。打开这个链接在浏览器里看排版/话题/内容：\n  {edit}\n\
-             满意后删掉该草稿，再把 PLATFORM_PROVIDER 设为 zhihu 走正式发布。"
-        );
+    // 诊断子命令（--test-notify / --test-screenshot / --test-write / --test-zhihu）：
+    // 命中则执行并在此提前返回，不进入真实续期流程。逻辑见 probe.rs。
+    if probe::run_if_probe(&cfg, &run)? {
         return Ok(());
     }
 
