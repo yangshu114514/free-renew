@@ -64,6 +64,6 @@ model = "openclaw"              # 固定值：网关按 agent 路由到其配置
 
 # ── 限额 ───────────────────────────────────────────────
 [limits]
-article_ready_timeout = 300    # 等文章可访问的超时（秒）
-http_timeout = 30              # 单请求超时（秒）
+article_ready_timeout = 60     # 等文章可访问的超时（秒）。裸 HTTP 必被 CSDN WAF 挡，真正的门禁在 Chrome 截图，无需设大
+http_timeout = 30              # 小请求（登录/查状态）超时（秒）；带截图的提交 POST 内部单独放宽到 90s
 

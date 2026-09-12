@@ -38,7 +38,8 @@ jobs:
 
   renew:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 5 轮重试 × 跨洋抖动，最坏单次续期可近 20 分钟；30 分易被网络重试撞墙，抬到 45
+    timeout-minutes: 45
     permissions:
       contents: read
     env:

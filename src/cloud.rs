@@ -54,6 +54,9 @@ impl CloudClient {
     pub fn new(account: CloudAccount, timeout_secs: u64) -> Self {
         let http = Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
+            // 连接握手单独设 10s 上限：三丰云境外不可达时表现为 connect 挂起，
+            // 若无此上限会白等满 timeout，快速失败才能把时间留给多轮重试
+            .connect_timeout(Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::limited(5))
             // 关键：登录后的会话 Cookie 必须跨请求保持
             .cookie_store(true)
@@ -79,7 +82,8 @@ impl CloudClient {
 
     /// 对每个候选端点现构请求体（multipart 的 Form 不可 Clone，不能 build 一次再 clone）。
     /// 外层带重试：Actions(Azure) → 中国 IDC 的线路抖动率很高，一次失败不能定生死。
-    /// 总尝试 = 3 轮（间隔 0s/5s/15s）× 候选端点数。
+    /// 总尝试 = 5 轮（间隔 0s/5s/15s/30s/60s）× 候选端点数；配合 connect_timeout，
+    /// 死主机每端点约 10s 快速失败，路由短暂恢复即可续上。
     /// timeout_secs：小请求（登录/查状态）30s 足够；带截图的提交 POST 需更宽。
     fn post_with<F>(&self, url: &str, timeout_secs: u64, build: F) -> Result<String>
     where
@@ -87,7 +91,7 @@ impl CloudClient {
     {
         let origin = site_origin(url);
         let mut last_err: Option<anyhow::Error> = None;
-        let backoffs = [0u64, 5, 15];
+        let backoffs = [0u64, 5, 15, 30, 60];
         for (round, backoff) in backoffs.iter().enumerate() {
             if *backoff > 0 {
                 tracing::warn!("请求重试 第{}轮（{backoff}s 后）: {url}", round + 1);
@@ -173,7 +177,7 @@ impl CloudClient {
         let url = self.account.renew_url.clone();
 
         let body = self
-            .post_with(&url, 120, |u| {
+            .post_with(&url, 90, |u| {
                 // 每次迭代现构 Form（Part 不可 Clone）
                 let part = multipart_part(&img_bytes);
                 let form = reqwest::blocking::multipart::Form::new()
