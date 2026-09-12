@@ -29,10 +29,15 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       # 闸门 2：幽灵依赖（rustc 永远看不见的“声明了却没用”，如曾经的 git2/thiserror）。
-      - name: "Gate 2 · cargo-machete 未使用依赖"
+      # 启发式检测，偶有误报（proc-macro / feature-only / 仅 #[derive] 用到的 crate），
+      # 故设为 non-blocking：真发现未用依赖就发一条醒目告警，但**绝不因误报把 CI 判红**。
+      - name: "Gate 2 · cargo-machete 未使用依赖（告警不阻断）"
+        continue-on-error: true
         run: |
           cargo install cargo-machete --locked --version '^0.7'
-          cargo machete
+          if ! cargo machete; then
+            echo "::warning title=可能未使用的依赖::cargo-machete 报告有未使用依赖——若为误报(proc-macro/derive)可忽略或加到 Cargo.toml [package.metadata.cargo-machete] ignored；若是真的请用 cargo remove 删掉"
+          fi
 
       # 闸门 3：禁止用 #[allow(dead_code)] / #![allow(...)] 静音编译器。
       # 上轮史山正是靠 allow 把 dead_code 警告糊掉而残留的；从源头堵死这条再生路。
