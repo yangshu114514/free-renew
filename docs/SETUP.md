@@ -187,3 +187,12 @@ Actions 页 `Run workflow` 提供几个**诊断/恢复**输入框（都留空即
 3. LLM key 设余额上限。
 4. 定期轮换密码与 Cookie。
 5. **重要数据务必异地备份**——免费服务器随时可能因续期失败或政策变化丢失。
+
+## 卸载
+
+```powershell
+.\uninstall.ps1            # 演练（默认）：只列出将删除的 Secrets/Variables/本地 profile，不删任何东西
+.\uninstall.ps1 -Execute   # 真删：二次确认后清理本工具写入的 GitHub Secrets/Variables + 本地 cookie profile
+```
+
+不删：仓库/fork 本体、Actions 运行历史、厂商与内容平台的真实账号。定时任务请自行到 Actions 页 `Disable workflow`。

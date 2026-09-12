@@ -2,7 +2,6 @@
 <#
 .SYNOPSIS
   CSDN Cookie 刷新（free-renew 日常维护；登录态存活时约 30 秒，需重新扫码则更久）
-
 .DESCRIPTION
   原理：用本机 Chrome/Edge 开一个"专用 profile + 远程调试端口"的窗口。
   - 首次运行：弹出浏览器 → 扫码登录 → 脚本自动检测到登录态并导出
@@ -12,7 +11,10 @@
 
 .EXAMPLE
   .\refresh-csdn-cookie.ps1
+  .\refresh-csdn-cookie.ps1 -SelfTest   # 仅体检：编译 CDP 客户端 + 查依赖/路径，不启动浏览器、不动登录态
 #>
+[CmdletBinding()]
+param([switch]$SelfTest)
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -68,6 +70,21 @@ function Invoke-CdpJson {
     param($Ws, [int]$Id, [string]$Method, [string]$ParamsJson = $null)
     $raw = [CdpClient]::CallAsync($Ws, $Id, $Method, $ParamsJson).GetAwaiter().GetResult()
     return ($raw | ConvertFrom-Json)
+}
+
+# ── 自体检：只验证依赖/编译，绝不启动浏览器、绝不动登录态 ───────────
+if ($SelfTest) {
+    Write-Host "[selftest] C# CDP 客户端编译通过"
+    Write-Host "[selftest] 浏览器: $browser"
+    $dir = Split-Path $OutFile -Parent
+    Write-Host ("[selftest] 输出目录可写: {0} ({1})" -f (Test-Path $dir), $dir)
+    $probe = Join-Path $dir (".fr_selftest_" + [guid]::NewGuid().ToString("N"))
+    try { Set-Content -Path $probe -Value "x" -ErrorAction Stop; Remove-Item $probe -Force; Write-Host "[selftest] 实际写入测试: OK" }
+    catch { Write-Host "[selftest] 实际写入测试: 失败 ($_)" }
+    if (Get-Command gh -ErrorAction SilentlyContinue) { Write-Host "[selftest] gh CLI: 已装（可直传 Secret）" }
+    else { Write-Host "[selftest] gh CLI: 未装（需手动贴 Secret）" }
+    Write-Host "[selftest] OK — 未启动浏览器、未改动任何登录态/Secret"
+    exit 0
 }
 
 # ── 启动/复用浏览器 ───────────────────────────────────────────
