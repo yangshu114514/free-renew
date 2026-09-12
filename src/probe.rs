@@ -74,6 +74,13 @@ fn test_write(cfg: &AppConfig, run: &RunContext) -> Result<()> {
         "===== 样文（{}，{} 字）=====\n# {}\n\n{}",
         vendor, article.word_count, article.title, article.body_markdown
     );
+    // 全文写成 artifact 文件，供下载后干净查看（不受 Actions 日志行前缀污染）。
+    let dbg = debug_dir();
+    let _ = std::fs::create_dir_all(&dbg);
+    let _ = std::fs::write(
+        dbg.join("article-sample.md"),
+        format!("# {}\n\n{}", article.title, article.body_markdown),
+    );
     run.event("test_write", "ok", json!({"vendor": vendor, "title": article.title, "word_count": article.word_count}));
     Ok(())
 }
