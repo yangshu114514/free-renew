@@ -24,7 +24,6 @@ cookie = "UserName=xxx; UserToken=xxx; UN=xxx; ..."
 creation_statement = 1         # 创作声明: 0=无声明 1=部分内容由AI辅助生成 2=整合创作 3=个人观点
 tags = ["云服务器", "Linux"]    # 最多 5 个
 categories = []                # 需为博客中已存在的分类名
-enabled = true
 
 # 知乎路线（把上面 provider 改成 "zhihu" 后启用本段，或走 ZHIHU_COOKIES 环境变量）
 # Cookie 怎么拿：浏览器登录 zhihu.com → F12 → Application → Cookies →

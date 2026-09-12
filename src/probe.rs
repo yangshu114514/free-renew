@@ -87,7 +87,7 @@ fn test_zhihu(cfg: &AppConfig, run: &RunContext) -> Result<()> {
         Some(llm) => {
             let a = writer::generate_article(llm, &vendor)?;
             println!("生成文章: {} ({} 字)", a.title, a.word_count);
-            (a.title, zhihu::md_to_html(&a.body_markdown))
+            (a.title, crate::markdown::to_html(&a.body_markdown, false))
         }
         None => {
             tracing::warn!("未配置 LLM，用固定样例正文探路（仅验证接口，不验证内容质量）");

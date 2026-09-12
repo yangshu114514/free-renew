@@ -63,7 +63,7 @@ pub struct PlatformSection {
 pub struct ZhihuPlatformConfig {
     /// 单行 "k=v; k=v" 形态 Cookie，须含 z_c0、_xsrf、d_c0、q_c1（DevTools 手动复制）
     pub cookie: String,
-    /// 发文必挂话题（不挂通常发不出去）。话题名列表，自动取第一个匹配。
+    /// 发文必挂话题（不挂通常发不出去）。逐个精确/前缀匹配，含其它云品牌名的候选自动排除。
     #[serde(default = "default_zhihu_topics")]
     pub topics: Vec<String>,
     /// 是否开启目录（table_of_contents）
@@ -79,10 +79,6 @@ pub fn default_zhihu_topics() -> Vec<String> {
 pub struct CsdnPlatformConfig {
     /// 单行 k=v; k=v 形态的完整 Cookie（采集器产出）
     pub cookie: String,
-    /// 预留：临时停用 CSDN 平台（当前未接入读取逻辑）
-    #[serde(default = "default_true")]
-    #[allow(dead_code)]
-    pub enabled: bool,
     #[serde(default = "default_creation_statement")]
     /// CSDN 创作声明：0=无 1=AI辅助 2=整合 3=个人观点。默认 1（诚实声明）。
     pub creation_statement: u8,
