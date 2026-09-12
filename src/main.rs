@@ -348,6 +348,26 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // --test-write [vendor]：只生成文章并全文输出（不发文、不碰知乎、不碰厂商），
+    // 供人工验内容质量。--test-zhihu 的前置：先把关文字，再验链路。
+    if std::env::args().any(|a| a == "--test-write") {
+        let Some(llm) = &cfg.llm else {
+            anyhow::bail!("--test-write 需要 LLM（LLM_BASE_URL/LLM_API_KEY/LLM_MODEL）");
+        };
+        let vendor = std::env::args()
+            .position(|a| a == "--test-write")
+            .and_then(|i| std::env::args().nth(i + 1))
+            .filter(|s| !s.starts_with("--"))
+            .unwrap_or_else(|| "三丰云".to_string());
+        let article = writer::generate_article(llm, &vendor)?;
+        println!(
+            "===== 样文（{}，{} 字）=====\n# {}\n\n{}",
+            vendor, article.word_count, article.title, article.body_markdown
+        );
+        run.event("test_write", "ok", json!({"vendor": vendor, "title": article.title, "word_count": article.word_count}));
+        return Ok(());
+    }
+
     // --test-zhihu [vendor]：知乎发文链路探路（低风控代价）——
     //   真生成一篇（验证新 prompt）+ 建草稿 + 写正文 + 挂话题，但**不点发布**，
     //   打印草稿编辑链接给你自己在浏览器看效果。确认鉴权/接口 OK 再切正式 provider。

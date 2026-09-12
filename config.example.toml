@@ -33,7 +33,7 @@ enabled = true
 #   影响账号的实质风险。命中验证码即停止不重试。详见 docs/SETUP.md 知乎章节。
 # [platform.zhihu]
 # cookie = "z_c0=...; _xsrf=...; d_c0=...; q_c1=..."
-# topics = ["云服务器", "Linux"]   # 发文必挂话题（不挂通常发不出去）
+# topics = ["免费云服务器", "虚拟主机"]   # 发文必挂话题（不挂通常发不出去），最多取前 3 个
 # toc = false                       # 是否开启文章目录
 
 # 协议常量覆盖（一般不用动；CSDN 更换 secret 时才需要）
