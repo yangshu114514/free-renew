@@ -35,6 +35,9 @@ if (-not $browser) { Write-Host "ERR: 找不到 Chrome 或 Edge，请先安装";
 Write-Host "[1/5] 浏览器: $browser"
 
 # ── CDP WebSocket 客户端：发命令后按 id 精确匹配响应，跳过事件消息 ──────
+# 类型名每次运行唯一（同一 PowerShell 会话里旧版残留类名会和本脚本撞车，
+# 且旧版没有按 id 匹配的逻辑，复用它等于把 bug 带回来）。用占位符替换。
+$TypeName = "CdpClient_" + [Guid]::NewGuid().ToString("N")
 $wsClientCode = @'
 using System;
 using System.Net.WebSockets;
@@ -42,7 +45,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-public static class CdpClient {
+public static class __TYPE__ {
     public static async Task<string> CallAsync(ClientWebSocket ws, int id, string method, string paramsJson) {
         var req = "{\"id\":" + id + ",\"method\":\"" + method + "\"";
         if (paramsJson != null) req += ",\"params\":" + paramsJson;
@@ -69,12 +72,14 @@ public static class CdpClient {
     }
 }
 '@
+$wsClientCode = $wsClientCode -replace "__TYPE__", $TypeName
 Add-Type -TypeDefinition $wsClientCode -Language CSharp
 
 function Invoke-Cdp {
     param($Ws, [ref]$CidRef, [string]$Method, [string]$ParamsJson = $null)
     $CidRef.Value++
-    $raw = [CdpClient]::CallAsync($Ws, $CidRef.Value, $Method, $ParamsJson).GetAwaiter().GetResult()
+    $cdpType = $TypeName -as [type]
+    $raw = $cdpType::CallAsync($Ws, $CidRef.Value, $Method, $ParamsJson).GetAwaiter().GetResult()
     $obj = $raw | ConvertFrom-Json
     if ($obj.error) { throw "CDP ${Method} 返回错误: $($obj.error.code) $($obj.error.message)" }
     return $obj
