@@ -51,8 +51,12 @@ jobs:
       LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
       LLM_MODEL: ${{ secrets.LLM_MODEL }}
-      PLATFORM_PROVIDER: csdn
+      # 发文平台：默认 csdn；仓库 Settings→Variables 加 PLATFORM_PROVIDER=zhihu 即切知乎
+      PLATFORM_PROVIDER: ${{ vars.PLATFORM_PROVIDER || 'csdn' }}
       CSDN_COOKIES: ${{ secrets.CSDN_COOKIES }}
+      ZHIHU_COOKIES: ${{ secrets.ZHIHU_COOKIES }}
+      # 知乎发文话题（可选，空格分隔；留空用内置默认"云服务器 Linux"）
+      ZHIHU_TOPICS: ${{ vars.ZHIHU_TOPICS }}
       NOTIFY_OPENCLAW_URL: ${{ secrets.NOTIFY_OPENCLAW_URL }}
       NOTIFY_OPENCLAW_USER: ${{ secrets.NOTIFY_OPENCLAW_USER }}
       NOTIFY_OPENCLAW_PASSWORD: ${{ secrets.NOTIFY_OPENCLAW_PASSWORD }}

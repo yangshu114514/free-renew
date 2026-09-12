@@ -75,6 +75,16 @@ pub struct CsdnConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct ZhihuConfig {
+    /// 单行 Cookie，含 z_c0/_xsrf/d_c0/q_c1
+    pub cookie: String,
+    /// 发文必挂话题（不挂通常发不出去）
+    pub topics: Vec<String>,
+    /// 是否开启目录
+    pub toc: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct NotifyConfig {
     pub webhook_url: String,
     pub tag: String,
@@ -96,6 +106,7 @@ pub struct AppConfig {
     pub llm: Option<LlmConfig>,
     pub platform_provider: String,
     pub csdn: Option<CsdnConfig>,
+    pub zhihu: Option<ZhihuConfig>,
     pub notify: NotifyConfig,
     pub article_ready_timeout: u64,
     pub http_timeout: u64,
@@ -220,7 +231,28 @@ impl AppConfig {
                 })
             });
 
-        // ---- 通知 ----
+        // ---- 知乎发文配置：env ZHIHU_COOKIES 优先，文件兜底 ----
+        let zhihu = file
+            .as_ref()
+            .and_then(|f| f.platform.zhihu.clone())
+            .map(|z| ZhihuConfig {
+                cookie: env("ZHIHU_COOKIES").unwrap_or(z.cookie),
+                topics: env("ZHIHU_TOPICS")
+                    .map(|s| s.split_whitespace().map(String::from).collect())
+                    .filter(|v: &Vec<String>| !v.is_empty())
+                    .unwrap_or(z.topics),
+                toc: z.toc,
+            })
+            .or_else(|| {
+                env("ZHIHU_COOKIES").map(|cookie| ZhihuConfig {
+                    cookie,
+                    topics: env("ZHIHU_TOPICS")
+                        .map(|s| s.split_whitespace().map(String::from).collect())
+                        .filter(|v: &Vec<String>| !v.is_empty())
+                        .unwrap_or_else(crate::file_config::default_zhihu_topics),
+                    toc: false,
+                })
+            });
         let notify_file = file.as_ref().map(|f| f.notify.clone()).unwrap_or_default();
         // OpenClaw 后端：文件段与 NOTIFY_OPENCLAW_* 环境变量二选一即可。
         // 环境变量路径必须独立成立——GitHub Actions 部署没有 config.toml，
@@ -268,6 +300,7 @@ impl AppConfig {
             llm,
             platform_provider: provider,
             csdn,
+            zhihu,
             notify,
             article_ready_timeout,
             http_timeout,
