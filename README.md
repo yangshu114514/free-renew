@@ -15,16 +15,24 @@
 irm https://raw.githubusercontent.com/yangshu114514/free-renew/main/install.ps1 | iex
 ```
 
-向导会问你 6 个问题：云账号密码 → LLM API（可选测试）→ CSDN 扫码 → 通知方式 → 每天几点跑 → 确认。全程约 5 分钟。
+向导会问你 6 个问题：云账号密码 → LLM API（可选测试）→ **选发文平台（CSDN/知乎）并采集其 Cookie** → 通知方式 → 每天几点跑 → 确认。全程约 5 分钟。
 
-Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.md) 手动走一遍（内容相同，含可选的 OpenClaw 微信通知接线、故障速查表）。
+Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.md) 手动走一遍（内容相同，含两个发文平台的采集方式、可选的 OpenClaw 微信通知接线、故障速查表）。
+
+## 发文平台：CSDN 或 知乎
+
+续期文章要发到第三方内容平台供厂商审核，二选一，装时选、日后可换：
+
+- **CSDN**（默认）：需已开通博客的 CSDN 号，Cookie 用 `scripts/refresh-csdn-cookie.ps1` 自动采集，最省心。
+- **知乎**：需发帖正常的号；Cookie 用 `scripts/refresh-zhihu-cookie.ps1` 走 CDP 抓 httpOnly 的 `z_c0`。⚠️ 知乎在 Actions 机房 IP 上自动发帖有触发风控的实质风险，代码做到"弹验证码即停不重试"，但画像风险无法消除——号很重要请选 CSDN。
 
 ## 日常使用：只有一个命令
 
-CSDN Cookie 过期时（数月一次；如配置了通知渠道，会收到提醒）：
+发文 Cookie 过期时（数周到数月一次；如配置了通知，会收到提醒）重跑对应平台的刷新脚本：
 
 ```powershell
-.\scripts\refresh-csdn-cookie.ps1
+.\scripts\refresh-csdn-cookie.ps1     # 用 CSDN
+.\scripts\refresh-zhihu-cookie.ps1    # 用知乎
 ```
 
 专用浏览器 profile 通常还保持登录态，脚本自动重新导出 Cookie 并可选直传 GitHub Secret，30 秒完事。
@@ -35,12 +43,12 @@ CSDN Cookie 过期时（数月一次；如配置了通知渠道，会收到提�
 
 | 文档 | 内容 |
 |---|---|
-| [docs/SETUP.md](docs/SETUP.md) | 完整安装指南、Secrets 明细、通知接线、日常运维速查表 |
-| [docs/protocol/](docs/protocol/) | 技术细节：三丰云/阿贝云 `cmd=` 协议、CSDN 签名算法、实测样本 |
+| [docs/SETUP.md](docs/SETUP.md) | 完整安装指南、双发文平台、Secrets 明细、通知接线、日常运维速查表 |
+| [docs/protocol/](docs/protocol/) | 技术细节：三丰云/阿贝云 `cmd=` 协议、CSDN 签名算法、知乎发文接口（实测样本） |
 | [config.example.toml](config.example.toml) | 全部配置项及注释（LLM 词表/角度池/禁词均可自定义） |
 | [NOTICE](NOTICE) | 第三方归属声明 |
 
-架构一句话：**GitHub Actions 每天跑一次本仓库的 Rust 二进制**——登录云厂商查状态，没到期 4 秒退出；到期则 LLM 生成一篇随机角度的体验文章（机器校验禁词/必含词）发到 CSDN，截图后提交给厂商审核，成功或失败都会通过已配置的通知渠道告警（OpenClaw→微信 / 通用 Webhook，可选）。60 天仓库无提交会导致定时任务被 GitHub 停用，已内置 [keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow) 自动保活。
+架构一句话：**GitHub Actions 每天跑一次本仓库的 Rust 二进制**——登录云厂商查状态，没到期几秒退出；到期则 LLM 生成一篇随机角度、经禁词/必含词/AI 腔机器校验的体验文章，发布到所选内容平台（CSDN 或知乎），截图后提交给厂商审核，成功或失败都会通过已配置的通知渠道告警（OpenClaw→微信 / 通用 Webhook，可选）。60 天仓库无提交会导致定时任务被 GitHub 停用，已内置 [keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow) 自动保活。
 
 ## 致谢
 
@@ -60,7 +68,7 @@ CSDN Cookie 过期时（数月一次；如配置了通知渠道，会收到提�
 
 **免责声明 / Disclaimer（中英全文）**：
 
-1. 本项目仅供学习和个人技术研究使用。使用者应自行确认并遵守阿贝云、三丰云、CSDN 及所使用的所有第三方平台的服务条款与使用规则。
+1. 本项目仅供学习和个人技术研究使用。使用者应自行确认并遵守阿贝云、三丰云、CSDN、知乎及所使用的所有第三方平台的服务条款与使用规则。
 2. 阿贝云、三丰云的免费服务器条款要求用户定期进行推广性质的续期操作。本项目对此类条款的自动化实现可能不被上述厂商认可或允许。**使用本项目产生的一切后果（包括但不限于账号封禁、服务器回收、数据丢失）由使用者自行承担。**
 3. 本项目通过 LLM 生成文章内容。使用者应确保生成内容的发布符合所在平台的内容政策，并在平台上如实声明 AI 辅助生成（本项目默认开启该声明）。使用者不得利用本项目批量制造垃圾内容、刷量或从事其他滥用行为。
 4. 本项目不存储、不上传、不收集任何用户凭据；所有配置仅保存在使用者本地或其私有仓库的 Secrets 中。使用者应妥善保管自己的凭据与 Cookie。
