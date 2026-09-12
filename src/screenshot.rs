@@ -107,27 +107,39 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path, login_cookie: Option<&s
     };
     let mut rendered = false;
 
-    // 挑战感知循环：最多 4 次导航。挑战 JS 在首次加载时执行并种 cookie，
-    // 之后的导航就是真页面。
-    for attempt in 1..=4 {
+    // 轮询等文章"真正公开可见"。知乎/CSDN 刚发布的文章都有审核/放行延迟，
+    // 期间对访问者（哪怕作者会话）返回登录墙/首页壳——早前的"内容不存在"拒单
+    // 就是这个。这里限时反复导航，直到页面出现标题或超时。总时长受 vendor
+    // "发布后 1 小时内提交"约束，默认 12 分钟。
+    let max_wait = std::env::var("ARTICLE_VISIBLE_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(720);
+    let poll_secs = 30;
+    let started = std::time::Instant::now();
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
         tab.navigate_to(url).with_context(|| format!("导航失败(第{attempt}次)"))?;
         tab.wait_until_navigated().context("页面加载超时")?;
-        // 挑战 JS 执行 + 真页面渲染余量
-        std::thread::sleep(std::time::Duration::from_secs(3));
+        std::thread::sleep(std::time::Duration::from_secs(3)); // JS 渲染余量
 
         let html = tab.get_content().unwrap_or_default();
-        if crate::waf::is_challenge(&html) {
-            tracing::warn!("第 {attempt} 次导航命中 WAF 挑战页，等 cookie 生效后重导航");
-            std::thread::sleep(std::time::Duration::from_secs(3));
-            continue;
+        if !crate::waf::is_challenge(&html)
+            && (title_key.is_empty() || html_shows_title(&html, &title_key))
+        {
+            rendered = true;
+            break;
         }
-        if !title_key.is_empty() && !html.contains(&title_key) {
-            tracing::warn!("第 {attempt} 次导航：页面不含文章标题关键词（len={}），重试", html.len());
-            std::thread::sleep(std::time::Duration::from_secs(3));
-            continue;
+        let waited = started.elapsed().as_secs();
+        if waited >= max_wait {
+            tracing::warn!("等待 {waited}s（{attempt} 次导航）后文章仍未公开可见，放弃");
+            break;
         }
-        rendered = true;
-        break;
+        tracing::info!(
+            "文章尚未公开可见（疑似平台审核中），已等 {waited}s，{poll_secs}s 后重试（第 {attempt} 次）"
+        );
+        std::thread::sleep(std::time::Duration::from_secs(poll_secs));
     }
     if !rendered {
         // 截一张现场图落盘用于诊断（可能是挑战页/404），但明确报错，不提交垃圾截图
@@ -142,7 +154,7 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path, login_cookie: Option<&s
         if let Ok(html) = tab.get_content() {
             let _ = std::fs::write(debug_dir.join("page.html"), html);
         }
-        bail!("4 次导航后仍未渲染出真文章页（WAF 挑战或文章不可见），拒绝提交垃圾截图");
+        bail!("多次导航后文章仍未公开可见（平台审核未完成或不可见），拒绝提交垃圾截图");
     }
 
     let png_bytes = tab
@@ -161,6 +173,35 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path, login_cookie: Option<&s
     }
 
     Ok(out)
+}
+
+/// 裸 HTTP 就绪探测（参考性检查，非门禁）。
+/// CSDN 对非浏览器流量随机 521 挑战，此检查只能证明"可达"，不能证明"未挑战"。
+/// 真正的渲染验证在 `capture` 内（Chrome 过挑战 + 标题匹配）。
+/// 页面是否显示了文章标题。先按原始 HTML 连续子串找（快路径）；找不到再剥掉
+/// 标签与空白后找——知乎/CSDN 常把标题拆进多个节点，连续子串会误判"不含标题"。
+fn html_shows_title(html: &str, title_key: &str) -> bool {
+    if html.contains(title_key) {
+        return true;
+    }
+    let flat: String = strip_tags(html).chars().filter(|c| !c.is_whitespace()).collect();
+    let needle: String = title_key.chars().filter(|c| !c.is_whitespace()).collect();
+    !needle.is_empty() && flat.contains(&needle)
+}
+
+/// 去掉 `<...>` 标签（含属性里的尖括号已转义，够用）。
+fn strip_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// 裸 HTTP 就绪探测（参考性检查，非门禁）。
@@ -190,5 +231,22 @@ pub fn wait_article_ready(url: &str, timeout_secs: u64) -> Result<()> {
             anyhow::bail!("裸 HTTP 就绪检查超时（最后状态: {last_status}）——WAF 挑战期，交由 Chrome 截图流程处理");
         }
         std::thread::sleep(std::time::Duration::from_secs(10));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_title_even_when_split_by_tags() {
+        let key = "三丰云免费云服务器实测";
+        // 连续子串直接命中
+        assert!(html_shows_title("<h1>三丰云免费云服务器实测：稳</h1>", key));
+        // 被标签/空白切碎也能命中
+        let split = "<h1><span>三丰云</span>\n<b>免费云服务器</b>实测</h1>";
+        assert!(html_shows_title(split, key));
+        // 真不含
+        assert!(!html_shows_title("<div>无关内容</div>", key));
     }
 }

@@ -143,6 +143,20 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
     };
     tracing::info!("文章生成完毕: {} ({} 字)", article.title, article.word_count);
 
+    // 全文落盘到 debug 目录（随 debug-dump artifact 上传）：日志里只留 300 字预览，
+    // 一旦发文被平台删除/判违规，能第一时间从 artifact 看到**到底哪句惹的祸**
+    // （2026-09-12 知乎删稿事件就是因为当时没有全文副本）。
+    {
+        let dbg = std::path::PathBuf::from(
+            std::env::var("FREE_RENEW_DEBUG_DIR").unwrap_or_else(|_| "/tmp/freerenew-debug".into()),
+        );
+        let _ = std::fs::create_dir_all(&dbg);
+        let _ = std::fs::write(
+            dbg.join(format!("article-{vendor}.md")),
+            format!("# {}\n\n{}", article.title, article.body_markdown),
+        );
+    }
+
     // 3. 发布到发文平台
     run.event(step("publish.start").as_str(), "ok", json!({
         "vendor": vendor, "provider": cfg.platform_provider, "title": article.title,
