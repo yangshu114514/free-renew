@@ -55,14 +55,31 @@ licenses and by fair-practice conventions.
              constants, not creative work.
 
 ----------------------------------------------------------------------------
-5. Informational references (no code or content copied)
-----------------------------------------------------------------------------
-  - frostming/fxzhihu (MIT): reference for the feasibility of zhihu's
-    x-zse-96 request signing. Not yet used in this project.
-  - NodeLoc community thread and CSDN blog posts: vendor review rules
-    and failure-mode reports for the free-server programs.
-  - Sanfengyun official help documents (content_1009 / content_1156):
-    review red lines quoted in docs/ and encoded in the article validator.
+5. Zhihu publish flow (community reference implementations)
+ ----------------------------------------------------------------------------
+   Source:    zimya/zhihu_obsidian  — https://github.com/zimya/zhihu_obsidian
+              License: 0BSD
+              wechatsync/Wechatsync  — https://github.com/wechatsync/Wechatsync
+              License: GPL-3.0 (consulted for API shape; not linked)
+   Use:       The Zhihu column publish flow in src/zhihu.rs — the four web
+              endpoints (create draft -> PATCH draft content -> attach topic
+              -> content/publish), the required headers (Cookie + x-xsrftoken
+              + x-requested-with: fetch), and the topic-autocomplete matching
+              were modelled on these tools' publicly-documented HTTP approach.
+              Notably the write endpoints do NOT require x-zse-96 signing.
+   Statement: Protocol/flow reference only; no source code copied. The Rust
+              implementation (src/zhihu.rs) is independent.
+
+ ----------------------------------------------------------------------------
+ 6. Informational references (no code or content copied)
+ ----------------------------------------------------------------------------
+   - frostming/fxzhihu (MIT): background on Zhihu's x-zse-96 request signing.
+     NOT used by this project — the article-publish path deliberately avoids
+     signed endpoints (see item 5). Kept here for anyone who needs signing.
+   - NodeLoc community thread and CSDN blog posts: vendor review rules
+     and failure-mode reports for the free-server programs.
+   - Sanfengyun official help documents (content_1009 / content_1156):
+     review red lines quoted in docs/ and encoded in the article validator.
 
 ----------------------------------------------------------------------------
 No affiliation
