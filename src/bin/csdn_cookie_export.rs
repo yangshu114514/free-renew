@@ -41,9 +41,11 @@ fn main() -> Result<()> {
         .context("打不开 csdn.net")?;
     tab.wait_until_navigated().context("csdn.net 加载超时")?;
 
-    // 轮询登录态：UserToken / UserName 出现即视为已登录
-    let mut logged = false;
-    for round in 1.. {
+    // 轮询登录态：UserToken / UserName 出现即视为已登录。
+    // 循环只有两条出路——检测到登录态就 break，浏览器失联就 bail——
+    // 故 break 之后不存在"其实没登录"的状态：曾经的 logged 标志 + unreachable!()
+    // 只是为死分支付的维护成本。
+    for round in 1u32.. {
         std::thread::sleep(Duration::from_secs(LOGIN_CHECK_INTERVAL));
         let cookies = match tab.get_cookies() {
             Ok(c) => c,
@@ -51,15 +53,11 @@ fn main() -> Result<()> {
         };
         if cookies.iter().any(|c| c.name == "UserToken" || c.name == "UserName") {
             println!("[采集器] 第 {round} 轮检测到登录态！");
-            logged = true;
             break;
         }
         if round == 1 {
             println!("[采集器] 等待登录中……（登录完成后自动导出，无需按回车）");
         }
-    }
-    if !logged {
-        unreachable!("循环内必然 break 或 bail");
     }
 
     // 等登录态稳定（重定向、后续 Set-Cookie 落地）

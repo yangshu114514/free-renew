@@ -175,9 +175,6 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path, login_cookie: Option<&s
     Ok(out)
 }
 
-/// 裸 HTTP 就绪探测（参考性检查，非门禁）。
-/// CSDN 对非浏览器流量随机 521 挑战，此检查只能证明"可达"，不能证明"未挑战"。
-/// 真正的渲染验证在 `capture` 内（Chrome 过挑战 + 标题匹配）。
 /// 页面是否显示了文章标题。先按原始 HTML 连续子串找（快路径）；找不到再剥掉
 /// 标签与空白后找——知乎/CSDN 常把标题拆进多个节点，连续子串会误判"不含标题"。
 fn html_shows_title(html: &str, title_key: &str) -> bool {

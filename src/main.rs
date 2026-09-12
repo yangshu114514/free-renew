@@ -147,9 +147,7 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
     // 一旦发文被平台删除/判违规，能第一时间从 artifact 看到**到底哪句惹的祸**
     // （2026-09-12 知乎删稿事件就是因为当时没有全文副本）。
     {
-        let dbg = std::path::PathBuf::from(
-            std::env::var("FREE_RENEW_DEBUG_DIR").unwrap_or_else(|_| "/tmp/freerenew-debug".into()),
-        );
+        let dbg = logging::debug_dir();
         let _ = std::fs::create_dir_all(&dbg);
         let _ = std::fs::write(
             dbg.join(format!("article-{vendor}.md")),
@@ -182,9 +180,7 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
         tracing::warn!("{vendor} 裸 HTTP 就绪检查未通过（WAF 挑战，Chrome 可过），继续截图: {e}");
     }
 
-    let debug_dir = std::path::PathBuf::from(
-        std::env::var("FREE_RENEW_DEBUG_DIR").unwrap_or_else(|_| "/tmp/freerenew-debug".into()),
-    );
+    let debug_dir = logging::debug_dir();
     let pic = match screenshot::capture(&url, &article.title, &debug_dir, login_cookie(cfg)) {
         Ok(p) => {
             let meta = std::fs::metadata(&p).ok();
@@ -339,10 +335,21 @@ fn main() -> Result<()> {
             else { "none" },
     }));
 
+    // process_account 内部已把失败写进事件与通知；这里只负责统计。
+    // 曾经的 unwrap_or(false) 把 Err 静默降级成"未成功"——日志里连一行根因都不留。
     let mut failures = 0;
     for profile in config::CLOUDS {
-        if !process_account(&cfg, &run, profile.key).unwrap_or(false) {
-            failures += 1;
+        match process_account(&cfg, &run, profile.key) {
+            Ok(true) => {}
+            Ok(false) => failures += 1,
+            Err(e) => {
+                let detail = format!("{e:#}");
+                tracing::error!("{} 续期流程异常终止: {detail}", profile.name);
+                run.event("run.account_error", "failed", json!({
+                    "profile": profile.key, "error": detail,
+                }));
+                failures += 1;
+            }
         }
     }
 
@@ -358,6 +365,4 @@ fn main() -> Result<()> {
     tracing::info!("=== free-renew 结束，耗时 {} 秒 ===", run.elapsed_secs());
     Ok(())
 }
-
-
 
