@@ -18,7 +18,7 @@ on:
         required: false
         default: ""
       test_write:
-        description: "可选：填厂商名只生成文章样文输出到日志（不发文不碰知乎），验内容质量用；优先级高于 test_zhihu"
+        description: "可选：填厂商名只生成文章样文输出到日志（不发文不碰知乎），验内容质量用"
         required: false
         default: ""
       submit_existing:
@@ -75,7 +75,7 @@ jobs:
       PLATFORM_PROVIDER: ${{ vars.PLATFORM_PROVIDER || 'csdn' }}
       CSDN_COOKIES: ${{ secrets.CSDN_COOKIES }}
       ZHIHU_COOKIES: ${{ secrets.ZHIHU_COOKIES }}
-      # 知乎发文话题（可选，空格分隔；留空用内置默认"云服务器 Linux"）
+      # 知乎发文话题（可选，空格分隔；留空用内置默认"免费云服务器 虚拟主机"）
       ZHIHU_TOPICS: ${{ vars.ZHIHU_TOPICS }}
       NOTIFY_OPENCLAW_URL: ${{ secrets.NOTIFY_OPENCLAW_URL }}
       NOTIFY_OPENCLAW_USER: ${{ secrets.NOTIFY_OPENCLAW_USER }}
@@ -115,6 +115,8 @@ jobs:
 
       - name: Run renewal
         run: |
+          # 诊断输入互斥，按此优先级取第一个非空者（与 probe.rs 的分派顺序一致）：
+          # submit_existing > test_write > test_zhihu > test_screenshot
           if [ -n "$SUBMIT_EXISTING" ]; then
             echo "[submit-existing] 复用已发布文章，只重试截图+提交（不重新发文）: $SUBMIT_EXISTING"
             ./target/release/free-renew --submit-existing "$SUBMIT_VENDOR" "$SUBMIT_EXISTING" "$SUBMIT_TITLE"
