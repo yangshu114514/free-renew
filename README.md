@@ -39,6 +39,8 @@ Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.m
 
 其他一切（每日检查、续期提交、失败告警、运行日志）全自动，无需关心。
 
+要清理：`.\uninstall.ps1`（默认演练只列出、`-Execute` 才真删 GitHub Secrets/Variables 与本地 cookie profile）。采集脚本也支持 `.\scripts\refresh-*.ps1 -SelfTest` 只体检依赖与 C# 编译、不弹浏览器。
+
 ## 内容安全与故障恢复
 
 - **内容安全红线**：生成端内置审核雷区一票否决（翻墙/内网穿透/免备案/灰产/政治等），命中就重写、连续命中则放弃本轮**绝不发**——宁可不续，也不发一篇可能连累你内容平台账号的擦边文（被真实删稿后加的护栏）。

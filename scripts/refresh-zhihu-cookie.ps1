@@ -14,7 +14,10 @@
 
 .EXAMPLE
   .\scripts\refresh-zhihu-cookie.ps1
+  .\scripts\refresh-zhihu-cookie.ps1 -SelfTest   # 仅体检：编译 CDP 客户端 + 查依赖/路径，不启动浏览器、不动登录态
 #>
+[CmdletBinding()]
+param([switch]$SelfTest)
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -83,6 +86,20 @@ function Invoke-Cdp {
     $obj = $raw | ConvertFrom-Json
     if ($obj.error) { throw "CDP ${Method} 返回错误: $($obj.error.code) $($obj.error.message)" }
     return $obj
+}
+
+# ── 自体检：只验证依赖/编译，绝不启动浏览器、绝不动登录态 ───────────
+if ($SelfTest) {
+    Write-Host "[selftest] C# CDP 客户端编译通过（唯一类名 $TypeName）"
+    Write-Host "[selftest] 浏览器: $browser"
+    $dir = Split-Path $OutFile -Parent
+    $probe = Join-Path $dir (".fr_selftest_" + [guid]::NewGuid().ToString("N"))
+    try { Set-Content -Path $probe -Value "x" -ErrorAction Stop; Remove-Item $probe -Force; Write-Host "[selftest] 输出目录可写: OK ($dir)" }
+    catch { Write-Host "[selftest] 输出目录写入失败: $_" }
+    if (Get-Command gh -ErrorAction SilentlyContinue) { Write-Host "[selftest] gh CLI: 已装（可直传 Secret）" }
+    else { Write-Host "[selftest] gh CLI: 未装（需手动贴 Secret）" }
+    Write-Host "[selftest] OK — 未启动浏览器、未改动任何登录态/Secret"
+    exit 0
 }
 
 # ── 启动 / 连接浏览器 ──────────────────────────────────────────────────
