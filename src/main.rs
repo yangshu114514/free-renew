@@ -262,6 +262,7 @@ fn publish_article(cfg: &AppConfig, vendor: &str, article: &writer::Article) -> 
                 &zhihu::md_to_html(&article.body_markdown),
                 &zh.topics,
                 zh.toc,
+                true, // 正式发布
             )
         }
         other => anyhow::bail!("未知发文平台: {other}（当前支持: csdn, zhihu）"),
@@ -344,6 +345,42 @@ fn main() -> Result<()> {
         let pic = screenshot::capture(&url, &title, &debug_dir, login_cookie(&cfg))?;
         let meta = std::fs::metadata(&pic)?;
         println!("截图成功: {} ({} bytes)", pic.display(), meta.len());
+        return Ok(());
+    }
+
+    // --test-zhihu [vendor]：知乎发文链路探路（低风控代价）——
+    //   真生成一篇（验证新 prompt）+ 建草稿 + 写正文 + 挂话题，但**不点发布**，
+    //   打印草稿编辑链接给你自己在浏览器看效果。确认鉴权/接口 OK 再切正式 provider。
+    if std::env::args().any(|a| a == "--test-zhihu") {
+        let Some(zh) = &cfg.zhihu else {
+            anyhow::bail!("--test-zhihu 需要知乎 Cookie：设 ZHIHU_COOKIES 环境变量或 config.toml [platform.zhihu]");
+        };
+        let vendor = std::env::args()
+            .position(|a| a == "--test-zhihu")
+            .and_then(|i| std::env::args().nth(i + 1))
+            .filter(|s| !s.starts_with("--"))
+            .unwrap_or_else(|| "三丰云".to_string());
+        let (title, html) = match &cfg.llm {
+            Some(llm) => {
+                let a = writer::generate_article(llm, &vendor)?;
+                println!("生成文章: {} ({} 字)", a.title, a.word_count);
+                (a.title, zhihu::md_to_html(&a.body_markdown))
+            }
+            None => {
+                tracing::warn!("未配置 LLM，用固定样例正文探路（仅验证接口，不验证内容质量）");
+                (
+                    format!("{vendor} 连通性测试草稿"),
+                    "<p>这是一条来自 free-renew 的接口探路草稿，非正式文章，可删。</p>".to_string(),
+                )
+            }
+        };
+        let client = zhihu::ZhihuClient::new(zh)?;
+        let edit = client.publish(&title, &html, &zh.topics, zh.toc, false)?;
+        run.event("test_zhihu", "ok", json!({"vendor": vendor, "draft_edit": edit}));
+        println!(
+            "知乎草稿探路成功（未发布）。打开这个链接在浏览器里看排版/话题/内容：\n  {edit}\n\
+             满意后删掉该草稿，再把 PLATFORM_PROVIDER 设为 zhihu 走正式发布。"
+        );
         return Ok(());
     }
 
