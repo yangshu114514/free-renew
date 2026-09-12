@@ -1,0 +1,45 @@
+name: lint
+
+# 代码质量闸门，与 renew.yml（每日续期）完全独立：这里红了不影响续期定时任务。
+# 只跑静态检查，无需 Chrome/字体，快。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: 严格闸门
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      # 闸门 1：clippy 默认组（correctness/style/complexity/perf）零告警。
+      # 这是“能真抓 bug”的那层；不开 pedantic/nursery（那只会刷一堆风格噪音）。
+      - name: "Gate 1 · clippy -D warnings"
+        run: cargo clippy --all-targets -- -D warnings
+
+      # 闸门 2：幽灵依赖（rustc 永远看不见的“声明了却没用”，如曾经的 git2/thiserror）。
+      - name: "Gate 2 · cargo-machete 未使用依赖"
+        run: |
+          cargo install cargo-machete --locked --version '^0.7'
+          cargo machete
+
+      # 闸门 3：禁止用 #[allow(dead_code)] / #![allow(...)] 静音编译器。
+      # 上轮史山正是靠 allow 把 dead_code 警告糊掉而残留的；从源头堵死这条再生路。
+      - name: "Gate 3 · 禁 dead-code 静音"
+        run: |
+          if grep -rnE '#!\[allow\(|#\[allow\(dead_code' src/ ; then
+            echo "::error::发现 allow(dead_code)/#![allow(...)] 静音——死代码请删除，别静音（详见 docs/SETUP.md 严格性闸门）"
+            exit 1
+          fi
+          echo "OK：无 dead-code 静音"
