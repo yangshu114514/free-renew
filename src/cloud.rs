@@ -80,7 +80,8 @@ impl CloudClient {
     /// 对每个候选端点现构请求体（multipart 的 Form 不可 Clone，不能 build 一次再 clone）。
     /// 外层带重试：Actions(Azure) → 中国 IDC 的线路抖动率很高，一次失败不能定生死。
     /// 总尝试 = 3 轮（间隔 0s/5s/15s）× 候选端点数。
-    fn post_with<F>(&self, url: &str, build: F) -> Result<String>
+    /// timeout_secs：小请求（登录/查状态）30s 足够；带截图的提交 POST 需更宽。
+    fn post_with<F>(&self, url: &str, timeout_secs: u64, build: F) -> Result<String>
     where
         F: Fn(&str) -> reqwest::blocking::RequestBuilder,
     {
@@ -98,7 +99,7 @@ impl CloudClient {
                     .header(REFERER, format!("{origin}/"))
                     .header(ORIGIN, origin.clone())
                     .header(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.8")
-                    .timeout(Duration::from_secs(30))
+                    .timeout(Duration::from_secs(timeout_secs))
                     .send();
                 match resp {
                     Ok(r) if r.status().as_u16() == 200 => {
@@ -126,7 +127,7 @@ impl CloudClient {
             ("password", self.account.password.as_str()),
         ];
         let resp_body = self
-            .post_with(&login_url, |u| self.http.post(u).form(&form))
+            .post_with(&login_url, 30, |u| self.http.post(u).form(&form))
             .context("登录请求失败")?;
 
         if !resp_body.contains("登录成功") && !resp_body.contains("登陆成功") {
@@ -145,7 +146,7 @@ impl CloudClient {
         }
         let url = self.account.renew_url.clone();
         let body = self
-            .post_with(&url, |u| {
+            .post_with(&url, 30, |u| {
                 self.http.post(u).form(&[("cmd", "check_free_delay"), ("ptype", "vps")])
             })
             .context("状态查询失败")?;
@@ -172,7 +173,7 @@ impl CloudClient {
         let url = self.account.renew_url.clone();
 
         let body = self
-            .post_with(&url, |u| {
+            .post_with(&url, 120, |u| {
                 // 每次迭代现构 Form（Part 不可 Clone）
                 let part = multipart_part(&img_bytes);
                 let form = reqwest::blocking::multipart::Form::new()
@@ -195,7 +196,7 @@ impl CloudClient {
     pub fn review_history(&self) -> Result<Value> {
         let url = self.account.renew_url.clone();
         let body = self
-            .post_with(&url, |u| {
+            .post_with(&url, 30, |u| {
                 self.http.post(u).form(&[
                     ("cmd", "free_delay_list"),
                     ("ptype", "vps"),
