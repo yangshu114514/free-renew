@@ -53,9 +53,26 @@ impl Default for CloudAccountConfig {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct PlatformSection {
-    /// 当前实现：csdn。预留知乎(playwright)等后续平台。
+    /// 发文平台：csdn | zhihu
     pub provider: Option<String>,
     pub csdn: Option<CsdnPlatformConfig>,
+    pub zhihu: Option<ZhihuPlatformConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ZhihuPlatformConfig {
+    /// 单行 "k=v; k=v" 形态 Cookie，须含 z_c0、_xsrf、d_c0、q_c1（DevTools 手动复制）
+    pub cookie: String,
+    /// 发文必挂话题（不挂通常发不出去）。话题名列表，自动取第一个匹配。
+    #[serde(default = "default_zhihu_topics")]
+    pub topics: Vec<String>,
+    /// 是否开启目录（table_of_contents）
+    #[serde(default)]
+    pub toc: bool,
+}
+
+pub fn default_zhihu_topics() -> Vec<String> {
+    vec!["云服务器".into(), "Linux".into()]
 }
 
 #[derive(Debug, Clone, Deserialize)]

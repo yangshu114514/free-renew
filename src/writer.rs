@@ -13,21 +13,34 @@ use serde_json::json;
 
 use crate::config::LlmConfig;
 
-/// 默认禁词（三丰云官方审核红线 + 常见自杀词）
-pub const DEFAULT_FORBIDDEN: &[&str] = &[
-    "申请延期", "延期申请", "续期", "续费", "白嫖", "薅羊毛",
+/// 默认禁词。只封真正的"求延期/白嫖"信号词。
+/// 注意：曾把"续期/续费"也封了——但实测用户自己那篇被三丰云接受、从没删过的
+/// 知乎文章标题就是《…每7天手动续期…》，"续期"恰恰是最真实的用法词，封它反而
+/// 逼模型绕着说人话不了、写出更假的同义替换。故解禁续期/续费，仅保留真正的红线。
+pub const DEFAULT_FORBIDDEN: &[&str] = &["申请延期", "白嫖", "薅羊毛"];
+
+/// 默认生成角度池（2026-09-12 重写：对齐实测能过审、不被删的真人文章 DNA——
+/// 长期真实使用视角 + 具体项目 + 诚实短板，杜绝营销测评腔）
+pub const DEFAULT_ANGLES: &[&str] = &[
+    "长期使用者复盘：跑了几个月，续期节奏与稳定性体感，哪些省心哪些要忍",
+    "拿它跟自己以前用过的免费/廉价云对比，逐项说优劣，最后给适用边界",
+    "一次具体部署记录：栈选型、踩的坑、资源占用数字、怎么扛住日常访问",
+    "学生/个人开发者视角：为什么拿它练手 Linux 和运维，能干什么不能干什么",
+    "环境折腾日志：装环境/换系统/配反代的过程与真实耗时、工单响应体验",
+    "从个人实际需求（博客/网盘/内网穿透/私有仓库）出发写选型与取舍",
+    "控制台与生态体验：文档、Docker/语言环境、社区问答、隐藏限制",
+    "成本与风险权衡：免费换来的限制是什么，为什么仍愿意每周花几十秒维系",
 ];
 
-/// 默认生成角度池：每篇随机抽一个，保证文章不重复
-pub const DEFAULT_ANGLES: &[&str] = &[
-    "从零开始第一次用云服务器的新手视角，写踩坑和摸索过程",
-    "拿它和之前用过的其他云服务对比，突出优缺点",
-    "记录一次具体的部署经历（如建站/跑脚本/挂服务），带操作细节",
-    "从性能/网络/稳定性角度写使用一个月后的真实感受",
-    "学生党视角：为什么选它来练手 Linux 和运维",
-    "写一次系统重装或环境配置的完整记录",
-    "从搭建个人博客/网盘的实际需求出发写选型思考",
-    "写它家控制台/工单/文档的使用体验",
+/// 人设种子池：每篇随机注入一套"真实项目 + 数字"，逼模型言之有物、避免空泛。
+/// 这是过审关键——真人测评一定有具体在跑的东西和量出来的数字。
+const PERSONA_SEEDS: &[(&str, &str)] = &[
+    ("FastAPI + PostgreSQL 后端、Nuxt3 SSR 前端、Redis 缓存、Gitea 私有仓库", "CPU 偶尔冲到 75~80%，内存常驻 600MB 左右，5M 带宽扛日常访问绰绰有余"),
+    ("一个 Typecho 博客 + 反代 + 自动备份脚本，外加 frp 内网穿透", "负载常年 0.2~0.5，内存占用不到一半，磁盘每周涨几百 MB"),
+    ("Django 小站 + PostgreSQL + Nginx + 定时任务爬虫", "跑三个服务后内存吃到七成，CPU 峰值到过九成但没卡死过"),
+    ("自建 Meilisearch 搜索 + Node 接口 + Obsidian 笔记同步中转", "冷启动慢一点，稳态内存 500MB 上下，API 响应几十毫秒"),
+    ("一个 Rust axum 服务 + SQLite + Caddy 自动 HTTPS", "编译时 CPU 会打满几分钟，平时内存占用很低，几百 MB 就够"),
+    ("Python 数据分析 notebook + JupyterHub + 定时拉数脚本", "跑大任务时内存吃紧要加 swap，日常挂小任务很稳"),
 ];
 
 /// 默认目标字数池（2026-09-12 起加长：实测 418 字偏短，审核观感单薄）
@@ -40,10 +53,15 @@ pub struct Article {
 }
 
 fn system_prompt() -> String {
-    "你是一位在个人博客上写云计算测评的技术博主，文风自然、有细节、像真人写的。\
-     你写的内容会发布在第三方博客平台，编辑会检查是否像真实使用体验。\
-     要求：口语化但不口水，有具体操作细节或数字，绝不用营销腔和 AI 味排比句。\
-     不要用'首先/其次/总之'这种模板结构，不要写'个人观点'式免责声明。"
+    "你在知乎/博客园以真名写长期技术使用笔记，读者是同类开发者，编辑会人工核是不是 AI 水文。\
+     文风：第一人称、口语、有具体项目和数字、敢写缺点和自己踩的坑，句子长短错落、允许偶尔不完整。\
+     铁律：\n\
+     - 严禁营销/AI 腔词：赋能、一站式、轻松搞定、海量、强大功能、稳定可靠性价比高式排比、\
+     总而言之、综上所述、首先其次最后、随着…的发展、不难发现、值得一提的是。\n\
+     - 严禁完美对仗的小标题和每段等长的工整结构——真实笔记是松散、详略不均的。\n\
+     - 至少写一个具体缺点或麻烦之处（免费服务的真实限制），不许全程夸。\n\
+     - 不要免责声明、不要‘以上为个人观点’、不要求赞求关注。\n\
+     写成一气呵成的真人记录，不像模板。"
         .to_string()
 }
 
@@ -53,22 +71,32 @@ fn user_prompt(
     vendor: &str,
     required: &[String],
     forbidden: &[String],
+    persona: (&str, &str),
 ) -> String {
     let domain = if vendor == "三丰云" { "sanfengyun" } else { "abeiyun" };
     let kw_list = required.join("”、“");
     let forbidden_list = forbidden.join("、");
+    let (stack, numbers) = persona;
     format!(
-        "写一篇关于 {vendor} 免费云服务器的使用体验文章。\n\n\
-         角度：{angle}\n\
-         长度：正文 {length} 字左右\n\
+        "以【{angle}】写一篇关于 {vendor} 免费云服务器的真实长期使用笔记。\n\n\
+         你在这台机器上实际跑着：{stack}。\
+         观测到的资源情况：{numbers}。把这些具体细节自然写进去（可改写措辞，但要有真东西）。\n\
+         长度：正文 {length} 字左右。\n\
          必须自然包含关键词：“{kw_list}”，\
-         以及官网地址 https://www.{domain}.com（至少一次，融入句子不要单独一行）\n\
-         禁止出现这些词：{forbidden_list}\n\
-         也禁止任何“帮我点赞”“求关注”之类的结尾。\n\n\
-         结构自由发挥，可以用小标题，穿插 1-2 处“（配图：xxx 的控制台截图）”这样的配图占位说明。\n\
+         以及官网地址 https://www.{domain}.com（至少一次，融进句子，别单列一行）。\n\
+         禁止出现这些词：{forbidden_list}。\n\
+         结构松散些、详略不均，穿插真实细节（某次工单多久回、哪步折腾了很久、半夜会不会担心掉线）。\n\
          直接输出 markdown 正文，第一行是 “# 标题”。不要任何解释。"
     )
 }
+
+/// 检测"AI 腔"信号词/句式。命中不直接判死（LLM 偶尔误触），但累计过多则重试，
+/// 因为平台机审/编辑正是靠这类模板痕迹判定"非真人"——这是本次被删的真病根。
+const AI_TELLS: &[&str] = &[
+    "总而言之", "综上所述", "首先，", "其次，", "最后，", "值得一提的是",
+    "不难发现", "赋能", "一站式", "轻松搞定", "海量",
+    "无论是", "为你提供", "值得信赖", "性价比极高",
+];
 
 fn validate(text: &str, vendor: &str, required: &[String], forbidden: &[String]) -> Vec<String> {
     let mut problems = vec![];
@@ -91,6 +119,15 @@ fn validate(text: &str, vendor: &str, required: &[String], forbidden: &[String])
     if text.chars().count() < 150 {
         problems.push("正文太短".into());
     }
+    // AI 腔：命中 >=3 处判为"太像机器文"，回炉
+    let tells = AI_TELLS.iter().filter(|t| text.contains(**t)).count();
+    if tells >= 3 {
+        problems.push(format!("AI 模板腔过重（命中 {tells} 处套话），改写成更松散真实的第一人称"));
+    }
+    // 小标题过密 = 模板结构信号；正文里 "## " 出现 >=4 次视为工整过头
+    if text.matches("\n## ").count() >= 4 {
+        problems.push("小标题过多，结构太模板化，减少或去掉部分小标题".into());
+    }
     problems
 }
 
@@ -104,24 +141,30 @@ pub fn generate_article(llm: &LlmConfig, vendor: &str) -> Result<Article> {
     } else {
         llm.required_keywords.clone()
     };
-    let mut retry_feedback: Vec<(String, String)> = vec![]; // (上次正文, 问题清单)
+    let mut retry_feedback: Vec<String> = vec![]; // 历轮问题清单（不带旧正文，避免与新人设事实冲突）
+    // 人设种子打乱后按轮取用：每轮（含重试）换一套具体项目+数字，
+    // 重试才是真的换内容，而不是拿同一批事实逼模型换个说法
+    let mut personas: Vec<&(&str, &str)> = PERSONA_SEEDS.iter().collect();
+    personas.shuffle(&mut rng);
 
-    for _attempt in 0..llm.max_retries {
+    for (attempt, _ignored) in (0..llm.max_retries).enumerate() {
         let angle = llm
             .angles
             .choose(&mut rng)
             .map(String::as_str)
             .unwrap_or("写一次通用的使用体验");
         let length = llm.lengths.choose(&mut rng).copied().unwrap_or(400);
+        let persona = personas[attempt % personas.len()];
 
-        // 基础消息 + 全部历史反馈（最近 3 对）喂回模型自纠
+        let user = user_prompt(angle, length, vendor, &required, &llm.forbidden_words, *persona);
         let mut messages = vec![
             json!({"role": "system", "content": system_prompt()}),
-            json!({"role": "user", "content": user_prompt(angle, length, vendor, &required, &llm.forbidden_words)}),
+            json!({"role": "user", "content": user}),
         ];
-        for (prev, problems) in &retry_feedback {
-            messages.push(json!({"role": "assistant", "content": prev}));
-            messages.push(json!({"role": "user", "content": format!("这篇不行，问题：{problems}。重新写一篇，修复以上所有问题。")}));
+        // 上一版被判为 AI 腔/不合规——只追加"写作约束"，不塞旧正文（旧人设会串味）
+        if !retry_feedback.is_empty() {
+            let all = retry_feedback.join("；");
+            messages.push(json!({"role": "user", "content": format!("上一版被判定不合格，问题：{all}。这次务必规避：结构更松散、详略不均、至少一个真实缺点，不要套话，重写一篇。")}));
         }
 
         let payload = json!({
@@ -172,8 +215,9 @@ pub fn generate_article(llm: &LlmConfig, vendor: &str) -> Result<Article> {
             });
         }
 
-        // 保留完整反馈链（最近 3 对），下一轮全部喂回模型自纠
-        retry_feedback.push((text.clone(), problems.join("；")));
+        // 累积问题清单喂回下一轮（只记问题，不记旧正文，避免人设串味）
+        retry_feedback.push(problems.join("；"));
+        retry_feedback.dedup();
         if retry_feedback.len() > 3 {
             retry_feedback.remove(0);
         }

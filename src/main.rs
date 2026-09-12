@@ -20,6 +20,7 @@ mod notify;
 mod screenshot;
 mod waf;
 mod writer;
+mod zhihu;
 
 use anyhow::Result;
 use cloud::RenewState;
@@ -222,10 +223,15 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
     }
 }
 
-/// 截图 Chrome 的登录 Cookie：唯一来源是 config（config.toml 或 CSDN_COOKIES env，
-/// config.rs 已合并）。截文章页本无需登录态，注入只为版面一致（去广告/预览一致）。
+/// 截图 Chrome 的登录 Cookie：随发文平台走（知乎文章页用知乎 cookie，CSDN 用 CSDN）。
+/// 唯一来源是 config（config.rs 已合并 env/文件）。截公开文章页本无需登录态，
+/// 注入只为版面一致 + 规避"未登录访客"折叠/挑战。
 fn login_cookie(cfg: &AppConfig) -> Option<&str> {
-    cfg.csdn.as_ref().map(|c| c.cookie.as_str()).filter(|c| !c.trim().is_empty())
+    let opt = match cfg.platform_provider.as_str() {
+        "zhihu" => cfg.zhihu.as_ref().map(|z| z.cookie.as_str()),
+        _ => cfg.csdn.as_ref().map(|c| c.cookie.as_str()),
+    };
+    opt.filter(|c| !c.trim().is_empty())
 }
 
 /// 通过配置的发文平台发布文章，返回文章 URL。
@@ -246,7 +252,19 @@ fn publish_article(cfg: &AppConfig, vendor: &str, article: &writer::Article) -> 
                 true, // publish；草稿模式留给人工确认场景
             )
         }
-        other => anyhow::bail!("未知发文平台: {other}（当前支持: csdn）"),
+        "zhihu" => {
+            let Some(zh) = &cfg.zhihu else {
+                anyhow::bail!("发文平台为 zhihu 但未配置 Cookie（config.toml [platform.zhihu] 或 ZHIHU_COOKIES 环境变量）");
+            };
+            let client = zhihu::ZhihuClient::new(zh)?;
+            client.publish(
+                &article.title,
+                &zhihu::md_to_html(&article.body_markdown),
+                &zh.topics,
+                zh.toc,
+            )
+        }
+        other => anyhow::bail!("未知发文平台: {other}（当前支持: csdn, zhihu）"),
     }
     .map_err(|e| {
         // 平台名进错误上下文，通知里能看出是哪家发文失败
@@ -341,6 +359,7 @@ fn main() -> Result<()> {
         "llm_model": cfg.llm.as_ref().map(|l| l.model.clone()),
         "provider": cfg.platform_provider.clone(),
         "csdn_ready": cfg.csdn.is_some(),
+        "zhihu_ready": cfg.zhihu.is_some(),
         "notify_backend": if cfg.notify.openclaw.is_some() { "openclaw" }
             else if !cfg.notify.webhook_url.is_empty() { "webhook" }
             else { "none" },
