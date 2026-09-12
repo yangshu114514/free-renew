@@ -65,26 +65,34 @@ Linux/macOS：`cargo run --release --bin csdn_cookie_export`（功能相同）�
 ### 选知乎发文路线（可选，替代 CSDN）
 
 如果你 CSDN 号权重低、AI 文老被机审删除，可改用**知乎**（需一个发帖正常、有
-权重的号）。三丰云/阿贝云认知乎文章 URL 作为续期凭证。
+权重的号）。三丰云/阿贝云认可知乎文章 URL 作为续期凭证。
 
 **1）切换平台**：仓库 Settings → Secrets and variables → **Variables** → New：
 
 - 名字 `PLATFORM_PROVIDER`，值 `zhihu`
 - （可选）名字 `ZHIHU_TOPICS`，值如 `云服务器 Linux`（空格分隔；不设则用默认）
 
-**2）导出知乎 Cookie**（知乎没有采集脚本，手动复制，2 分钟）：
+**2）采集知乎 Cookie（推荐用脚本，自动搞定 httpOnly 的 z_c0）**：
 
-1. 电脑浏览器登录 <https://www.zhihu.com>
-2. F12 → **Application（应用）** → Cookies → 选 `https://www.zhihu.com`
-3. 把 `z_c0`、`_xsrf`、`d_c0`、`q_c1` 这几条复制拼成一行 `k=v; k=v; ...`
-   （`z_c0` 是登录态命脉、`_xsrf` 发文必需，缺了会直接报错）
-4. 存成 Secret：
+知乎登录态命脉 `z_c0` 是 httpOnly，浏览器 F12 / `document.cookie` **都抓不到**，
+所以用专用脚本走 Chrome 的 CDP 通道读取：
 
-```bash
-gh secret set ZHIHU_COOKIES --body "z_c0=...; _xsrf=...; d_c0=...; q_c1=..."
+```powershell
+.\scripts\refresh-zhihu-cookie.ps1
+# 弹出知乎登录页 → 你扫码/手机号登录 → 脚本自动检测 z_c0 → 导出 → 问你是否直传 Secret，按 y
 ```
 
-**3）验证**：Actions 手动 Run 一轮，看是否走完"建草稿→挂话题→发布→截图→提交"。
+产物在 `%TEMP%\zhihu_cookies_oneline.txt`；在 free-renew 仓库目录里跑且装了 gh CLI，
+会直接更新 Secret `ZHIHU_COOKIES`。
+
+> 备用手动法（脚本不便时）：F12 → **Network** 标签 → 刷新页面 → 点任意发往
+> zhihu.com 的请求 → Request Headers → 复制 `Cookie:` 整行（含 httpOnly）→
+> `gh secret set ZHIHU_COOKIES --body "z_c0=...; _xsrf=...; d_c0=...; q_c1=..."`。
+
+**3）探路验证（强烈建议先跑，别直接公开发帖）**：先用草稿探路确认鉴权/接口通、
+内容质量过关且不触发验证码——在 Actions 手动 Run，`test_zhihu` 填厂商名（如 `三丰云`）。
+该轮只建草稿+写正文+挂话题、停在发布前，日志给出草稿编辑链接，自己打开核对。
+确认干净后，再设 `PLATFORM_PROVIDER=zhihu` 走正式自动续期。
 
 > ⚠️ **账号风控风险（务必知情）**：本工具默认在 GitHub Actions 的微软数据中心
 > IP 上、用你的知乎登录态自动发帖。这与"你本人平时登录的家用 IP"画像差异很大，
@@ -138,7 +146,7 @@ gh secret set ZHIHU_COOKIES --body "z_c0=...; _xsrf=...; d_c0=...; q_c1=..."
 
 **处置（30 秒）**：再跑一遍 `.\scripts\refresh-csdn-cookie.ps1`。专用 profile 里登录态通常还活着，脚本直接重新导出 → 按 y 直传 Secret → 完事。如果 profile 也过期了才需要重新扫码。
 
-**知乎用户**：`ZHIHU_COOKIES` 里的 `z_c0` 失效（收"登录已过期/401"类通知）时，登录 zhihu.com → F12 重新复制完整 Cookie → `gh secret set ZHIHU_COOKIES --body "..."`。知乎 Cookie 无自动刷新脚本，只能手动。若通知是 403/风控字样，先别再重触发，按上文"风控"说明处理。
+**知乎用户**：`ZHIHU_COOKIES` 里的 `z_c0` 失效（收"登录已过期/401"类通知）时，重跑一遍 `.\scripts\refresh-zhihu-cookie.ps1`（专用 profile 里若登录态还在，直接重新导出；不在则再扫码），按 y 直传 Secret 即可。若通知是 403/风控/验证码字样，先别再重触发，按上文"风控"说明人工处理。
 
 **预防**：CSDN Cookie 实测寿命数月。可以在日历上设个 2 个月提醒，或者干脆等通知来了再处理——失败当天就会尝试告警（需已配置通知渠道），不会静默丢失。
 
