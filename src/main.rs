@@ -176,8 +176,10 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
             p
         }
         Err(e) => {
-            run.event(step("screenshot").as_str(), "failed", json!({"url": url, "error": e.to_string()}));
-            notify::send(&cfg.notify, &format!("{vendor} 截图失败"), &e.to_string());
+            // {e:#} 打印完整错误链，截图失败要看得到根因（导航超时/无字形/文件写入）
+            let detail = format!("{e:#}");
+            run.event(step("screenshot").as_str(), "failed", json!({"url": url, "error": detail}));
+            notify::send(&cfg.notify, &format!("{vendor} 截图失败"), &detail);
             return Ok(false);
         }
     };
@@ -208,10 +210,13 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
             Ok(false)
         }
         Err(e) => {
+            // {e:#} 打印完整错误链：提交失败必须看到根因（超时/连接重置/HTTP 码），
+            // 只 to_string() 会退化成一句"续期提交失败"，下次还是查不出为什么
+            let detail = format!("{e:#}");
             run.event(step("submit.done").as_str(), "failed", json!({
-                "vendor": vendor, "url": url, "error": e.to_string(),
+                "vendor": vendor, "url": url, "error": detail,
             }));
-            notify::send(&cfg.notify, &format!("{vendor} 提交异常"), &e.to_string());
+            notify::send(&cfg.notify, &format!("{vendor} 提交异常"), &detail);
             Ok(false)
         }
     }
