@@ -132,12 +132,19 @@ impl ZhihuClient {
             bail!("知乎写正文失败 HTTP {status}: {}", crate::http::truncate_chars(&body, 200));
         }
 
-        // 3. 挂话题（不挂通常发不出去）
-        if let Some(topic) = topics.first() {
-            match self.attach_topic(&id, topic) {
-                Ok(()) => tracing::info!("知乎话题已挂: {topic}"),
-                // 话题失败不致命：部分情况下仍可发；记录后继续尝试发布
-                Err(e) => tracing::warn!("知乎挂话题失败（继续尝试发布）: {e}"),
+        // 3. 挂话题（不挂通常发不出去）。逐个候选挂上，最多 3 个（知乎上限），
+        //    按解析到的真实话题名去重，失败不致命但每个都留日志。
+        {
+            let mut attached: Vec<String> = vec![];
+            for topic in topics.iter().take(3) {
+                match self.attach_topic(&id, topic, &mut attached) {
+                    Ok(Some(name)) => attached.push(name),
+                    Ok(None) => tracing::warn!("话题“{topic}”无安全匹配或已重复，跳过"),
+                    Err(e) => tracing::warn!("挂话题“{topic}”失败（继续尝试发布）: {e}"),
+                }
+            }
+            if attached.is_empty() {
+                bail!("所有候选话题都没挂上，知乎发布通常会被拒——请调 ZHIHU_TOPICS/[platform.zhihu].topics");
             }
         }
 
@@ -190,8 +197,9 @@ impl ZhihuClient {
         Ok(url)
     }
 
-    /// 话题自动补全 → 取第一个匹配 → 绑到草稿。
-    fn attach_topic(&self, id: &str, topic: &str) -> Result<()> {
+    /// 挂话题。成功返回 Some(知乎侧真实话题名)；无安全匹配返回 None；网络/HTTP 错误 Err。
+    /// 已挂在 `attached` 里的话题名会被跳过（返回 None）。
+    fn attach_topic(&self, id: &str, topic: &str, attached: &mut Vec<String>) -> Result<Option<String>> {
         let q = urlencode(topic);
         let resp = self
             .req(
@@ -205,18 +213,27 @@ impl ZhihuClient {
         let (status, body) = read(resp)?;
         check_block(status, &body)?;
         let arr: Value = serde_json::from_str(&body).context("话题补全响应非 JSON")?;
-        let first = arr
-            .as_array()
-            .and_then(|a| a.first())
-            .cloned()
-            .context("话题无匹配结果")?;
+        let candidates = arr.as_array().cloned().unwrap_or_default();
+        let chosen = candidates
+            .iter()
+            .filter_map(|c| {
+                let name = c.get("name").and_then(Value::as_str)?;
+                let score = topic_score(topic, name)?;
+                Some((score, c.clone(), name.to_string()))
+            })
+            .min_by_key(|(score, _, name)| (*score, name.chars().count()))
+            .filter(|(_, _, name)| !attached.contains(name));
+        let (_, payload, name) = match chosen {
+            Some(x) => x,
+            None => return Ok(None),
+        };
         let resp = self
             .req(
                 reqwest::Method::POST,
                 &format!("{ZHUANLAN}/api/articles/{id}/topics"),
             )
             .header("Content-Type", "application/json")
-            .json(&first)
+            .json(&payload)
             .send()
             .context("知乎绑定话题请求失败")?;
         let (status, body) = read(resp)?;
@@ -224,7 +241,25 @@ impl ZhihuClient {
         if !(200..300).contains(&status) {
             bail!("绑定话题 HTTP {status}: {}", crate::http::truncate_chars(&body, 160));
         }
-        Ok(())
+        tracing::info!("话题“{topic}”→ 知乎话题“{name}”");
+        Ok(Some(name))
+    }
+}
+
+/// 候选话题名是否可用及优先级（数字小=优先）。None=直接排除。
+fn topic_score(want: &str, name: &str) -> Option<usize> {
+    const BRANDS: &[&str] = &["阿里", "腾讯", "华为", "京东", "天翼", "移动", "亚马逊", "AWS", "百度", "电信", "联通"];
+    if BRANDS.iter().any(|b| name.contains(b)) {
+        return None;
+    }
+    if name == want {
+        Some(0)
+    } else if name.starts_with(want) || want.starts_with(name) {
+        Some(1)
+    } else if name.contains(want) {
+        Some(2)
+    } else {
+        None
     }
 }
 
@@ -312,6 +347,19 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn topic_score_prefers_exact_and_rejects_brands() {
+        // 实测候选：腾讯云服务器/华为云服务器/三丰云服务器/免费云服务器
+        assert_eq!(topic_score("云服务器", "腾讯云服务器"), None, "品牌名必须排除");
+        assert_eq!(topic_score("云服务器", "华为云服务器"), None);
+        assert_eq!(topic_score("云服务器", "某大厂服务器"), None);
+        assert_eq!(topic_score("免费云服务器", "免费云服务器"), Some(0), "完全相等最优");
+        assert_eq!(topic_score("免费云服务器", "免费云服务器推荐"), Some(1), "前缀匹配次优");
+        assert_eq!(topic_score("免费云服务器", "三丰云服务器"), None, "不含目标词则排除");
+        assert_eq!(topic_score("虚拟主机", "虚拟主机"), Some(0));
+        assert_eq!(topic_score("虚拟主机", "不相关内容"), None);
+    }
 
     #[test]
     fn cookie_value_and_xsrf() {

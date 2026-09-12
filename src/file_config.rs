@@ -72,7 +72,7 @@ pub struct ZhihuPlatformConfig {
 }
 
 pub fn default_zhihu_topics() -> Vec<String> {
-    vec!["云服务器".into(), "Linux".into()]
+    vec!["免费云服务器".into(), "虚拟主机".into()]
 }
 
 #[derive(Debug, Clone, Deserialize)]
