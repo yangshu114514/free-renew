@@ -79,12 +79,12 @@ fn send_openclaw(cfg: &NotifyConfig, oc: &crate::config::OpenClawNotify, title: 
             let status = resp.status();
             if status.is_success() {
                 tracing::info!("[notify] openclaw 后端 HTTP {status}（agent 异步执行，送达以微信为准）");
-            } else if status.as_u16() == 401 {
-                // 401 = 网关在 basic auth 层就拒了，agent 没接单，这条告警没送达。
+            } else if matches!(status.as_u16(), 401 | 403) {
+                // 401/403 = 网关在鉴权层就拒了，agent 没接单，这条告警**没送达**。
                 // 别用"异步执行"话术掩盖——明确报错，用户必须修 Secrets 凭据
                 tracing::error!(
-                    "[notify] openclaw 网关 401：NOTIFY_OPENCLAW_USER/PASSWORD 与网关 basic auth 不符，\
-                     通知未送达（去仓库 Settings→Secrets 核对，网关侧查 htpasswd）"
+                    "[notify] openclaw 网关 {status}：NOTIFY_OPENCLAW_USER/PASSWORD 与网关 basic auth 不符\
+                     （或网关拒绝该来源），通知未送达（去仓库 Settings→Secrets 核对，网关侧查 htpasswd/防火墙）"
                 );
             } else {
                 // 4xx/5xx 超时类：agent 可能已接单（fire-and-forget），只记日志

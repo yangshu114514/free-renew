@@ -200,9 +200,12 @@ impl AppConfig {
         };
 
         // ---- 发文平台 ----
+        // 小写归一：仓库 Variables 是网页表单手填的，"Zhihu"/"CSDN" 这类大小写手滑
+        // 不该让整轮续期以"未知发文平台"作废
         let provider = env("PLATFORM_PROVIDER")
             .or(file.as_ref().and_then(|f| f.platform.provider.clone()))
-            .unwrap_or_else(|| "csdn".to_string());
+            .unwrap_or_else(|| "csdn".to_string())
+            .to_ascii_lowercase();
         let csdn = file
             .as_ref()
             .and_then(|f| f.platform.csdn.clone())

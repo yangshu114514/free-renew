@@ -66,7 +66,12 @@ pub fn solve(challenge_html: &str) -> Result<String> {
         .arg(&solver_path)
         .arg(&challenge_path)
         .output()
-        .context("运行 node 求解器失败（Actions 预装 Node；本地需安装）")?;
+        .context("运行 node 求解器失败（Actions 预装 Node；本地需安装）");
+    // 无论成败都清临时文件：求解失败路径同样会走到这里，早先版本失败即泄漏，
+    // 挑战页原文（含厂商 WAF 变量）长期堆在共享 /tmp 上
+    let _ = std::fs::remove_file(&challenge_path);
+    let _ = std::fs::remove_file(&solver_path);
+    let out = out?;
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     let stdout = String::from_utf8_lossy(&out.stdout);

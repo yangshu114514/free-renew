@@ -142,16 +142,26 @@ function Set-GhVar($name, $value) {
 }
 
 # ── [2/6] 云账号 ─────────────────────────────────────────────
-Step 2 "云厂商账号（免费服务器的控制台账密，仅存入你仓库的加密 Secrets）"
-$sfUser = Ask "三丰云 手机号" "13800000000"
-$sfPass = Ask "三丰云 密码" "demo-pass"
-Set-GhSecret "SANFENGYUN_USERNAME" $sfUser
-Set-GhSecret "SANFENGYUN_PASSWORD" $sfPass
-$abUser = Ask "阿贝云 手机号" "13800000000"
-$abPass = Ask "阿贝云 密码" "demo-pass"
-Set-GhSecret "ABEIYUN_USERNAME" $abUser
-Set-GhSecret "ABEIYUN_PASSWORD" $abPass
-Ok "两台云账号完成"
+Step 2 "云厂商账号（免费服务器的控制台账密，仅存入你仓库的加密 Secrets；只用一家则另一家留空跳过）"
+$sfUser = Ask "三丰云 手机号（回车跳过）"
+$sfPass = Ask "三丰云 密码"
+$abUser = Ask "阿贝云 手机号（回车跳过）"
+$abPass = Ask "阿贝云 密码"
+# 空=跳过该厂商（config 侧本来就支持只配一家）；半套凭据同样跳过并警告——
+# 原先把空值直接 `| gh secret set`，GitHub 拒绝空 Secret → 脚本 Die，
+# 想只跑一家的用户根本装不完。
+function Set-CloudCreds($label, $keyPrefix, $user, $pass) {
+    $u = "$user".Trim(); $p = "$pass"
+    if ($u -eq "" -and $p -eq "") { Warn "$label 留空 → 跳过此厂商"; return "skipped" }
+    if ($u -eq "" -or  $p -eq "") { Warn "$label 只填了一半（用户名/密码缺一）→ 跳过，半套凭据登录不了"; return "skipped" }
+    Set-GhSecret "${keyPrefix}_USERNAME" $u
+    Set-GhSecret "${keyPrefix}_PASSWORD" $p
+    return "ok"
+}
+$sfOk = Set-CloudCreds "三丰云" "SANFENGYUN" $sfUser $sfPass
+$abOk = Set-CloudCreds "阿贝云" "ABEIYUN" $abUser $abPass
+if ($sfOk -ne "ok" -and $abOk -ne "ok" -and -not $DryRun) { Die "两家云账号都没配置——本工具没有可续期的对象" }
+Ok "云账号完成（三丰云:$sfOk 阿贝云:$abOk）"
 
 # ── [3/6] LLM ────────────────────────────────────────────────
 Step 3 "LLM 配置（写文章用，任何 OpenAI 兼容接口）"
@@ -283,18 +293,20 @@ $cron = "30 $utcH * * *"
 Write-Host "  cron = `"$cron`" (UTC) = 北京时间 ${t}:30"
 
 Write-Host ""
-Write-Host "──────── 部署确认（以下均为拟写入项）────────" -ForegroundColor Cyan
+Write-Host "──────── 部署摘要 ────────" -ForegroundColor Cyan
 function Mask($s) { if ($s.Length -ge 5) { $s.Substring(0,3) + "****" + $s.Substring($s.Length-2) } else { "****" } }
 Write-Host "仓库:     $repo"
-Write-Host "三丰云:   $(Mask $sfUser)"
-Write-Host "阿贝云:   $(Mask $abUser)"
+Write-Host "三丰云:   $(if ($sfOk -eq 'ok') { Mask $sfUser } else { '(跳过)' })"
+Write-Host "阿贝云:   $(if ($abOk -eq 'ok') { Mask $abUser } else { '(跳过)' })"
 Write-Host "LLM:      $llmModel @ $llmBase"
-Write-Host "发文平台: $chosenPlatform（Cookie 拟入 Secrets）"
+Write-Host "发文平台: $chosenPlatform（Cookie 已入 Secrets）"
 Write-Host "通知:     $notifyStatus"
 Write-Host "定时:     每天 ${t}:30 北京时间"
 Write-Host ""
-$ans = Ask "确认部署? (Y/n)" "Y"
-if ($ans -match "^[nN]") { Die "已取消。Secrets 已写入的条目可到仓库 Settings→Secrets 手动清理。" }
+Write-Host "注意：上面除 cron 外的配置【已实际写入】仓库 Secrets/Variables；" -ForegroundColor DarkGray
+Write-Host "      这里的确认只控制后续三个动作——改 cron、启用定时、触发首跑。" -ForegroundColor DarkGray
+$ans = Ask "继续完成部署? (Y/n)" "Y"
+if ($ans -match "^[nN]") { Die "已停止。注意：此前写入的 Secrets/Variables 仍在仓库，可用 uninstall.ps1 -Execute 清理。" }
 
 # 改 cron（与默认不同才需要提交）。用 WriteAllText 避免 WinPS5.1 的 UTF8 BOM 污染 yaml。
 $wfPath = Join-Path (Get-Location) ".github\workflows\renew.yml"
@@ -317,20 +329,22 @@ if (Test-Path $wfPath) {
 # 首跑
 Write-Host ""
 # fork 仓库的 scheduled workflow 被 GitHub 默认禁用，需先启用一次（用 gh api 查 is_fork，url 串匹配不可靠）。
+# enable 端点的 workflow id 只认【文件名】renew.yml——实测工作流显示名
+# "free-server-renewal"（及其 .yml 变体）一律 404，此前这一句从未成功启用过。
 if ($repo -and $repo -ne $UPSTREAM) {
     Guard "确保 fork 的定时任务已启用" {
         try {
             $isFork = ((gh api "repos/$repo" --jq '.fork' 2>$null) -eq "true")
             if ($isFork) {
                 Write-Host "  检测到 fork 仓库：启用其定时任务..." -ForegroundColor Yellow
-                gh api -X PUT "repos/$repo/actions/workflows/free-server-renewal.yml/enable" 2>&1 | Out-Null
+                gh api -X PUT "repos/$repo/actions/workflows/renew.yml/enable" 2>&1 | Out-Null
                 if ($LASTEXITCODE -ne 0) { Warn "自动启用失败——请到 Actions 页点 Enable workflow" }
             }
         } catch { Warn "查询 fork 状态失败，稍后到 Actions 页手动确认已启用" }
     }
 }
 Guard "触发首次运行" {
-    gh workflow run free-server-renewal @repoArg 2>&1 | Out-Null
+    gh workflow run renew.yml @repoArg 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Warn "触发失败，请到 Actions 页面手动 Run workflow" }
 }
 Guard "打开 Actions 页" { Start-Process "https://github.com/$repo/actions" 2>$null }

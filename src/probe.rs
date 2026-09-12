@@ -7,6 +7,11 @@
 //! - `--test-screenshot <url> [title]`  截图链路（WAF 挑战 + Cookie 注入 + 标题渲染）
 //! - `--test-write [vendor]`  只生成样文并打印（不发文、不碰知乎/厂商），验内容质量
 //! - `--test-zhihu [vendor]`  知乎发文链路探路：建草稿+写正文+挂话题，**不发布**，返回编辑链接
+//! - `--submit-existing <vendor> <url> [title]`  复用已发布文章只重试截图+提交
+//!
+//! 同传多个子命令时，分派优先级必须与 renew.yml 的 if/elif 顺序一致
+//! （submit-existing > test-write > test-zhihu > test-screenshot > test-notify），
+//! 否则"手动触发以为跑 A、实际跑了 B"。改任何一边都要同步另一边。
 
 use anyhow::{bail, Result};
 use serde_json::json;
@@ -52,7 +57,7 @@ fn test_screenshot(cfg: &AppConfig, run: &RunContext) -> Result<()> {
         .nth(pos + 1)
         .ok_or_else(|| anyhow::anyhow!("--test-screenshot 需要一个文章 URL 参数"))?;
     let title = std::env::args().nth(pos + 2).unwrap_or_default();
-    let pic = screenshot::capture(&url, &title, &logging::debug_dir(), login_cookie(cfg))?;
+    let pic = screenshot::capture(&url, &title, &logging::debug_dir(), login_cookie(cfg), "probe")?;
     let meta = std::fs::metadata(&pic)?;
     let _ = run; // 截图探测无需落 JSONL 事件
     println!("截图成功: {} ({} bytes)", pic.display(), meta.len());
@@ -123,6 +128,11 @@ fn submit_existing(cfg: &AppConfig, run: &RunContext) -> Result<()> {
         .filter(|s| !s.starts_with("--"))
         .ok_or_else(|| anyhow::anyhow!("--submit-existing 需要文章 URL"))?;
     let title = args.get(pos + 3).cloned().unwrap_or_default();
+    if title.trim().is_empty() {
+        // 空 title = 截图的标题校验被跳过：登录墙/首页壳也能过 → 把垃圾图提交给
+        // 厂商换一句"内容不存在"。复用文章重试时务必把标题前 12 字传进来。
+        tracing::warn!("未提供文章标题：截图阶段无法校验页面是不是真文章，强烈建议传 title 参数");
+    }
 
     let account = cfg
         .accounts
@@ -131,13 +141,14 @@ fn submit_existing(cfg: &AppConfig, run: &RunContext) -> Result<()> {
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("未配置厂商账号 {vendor}（*_USERNAME/PASSWORD）"))?;
 
+    let vendor_key = account.profile.key;
     let mut client = cloud::CloudClient::new(account, cfg.http_timeout);
     // 登录只为建立会话；状态不拦提交（冗余提交比漏提交安全）。
     let (state, ..) = client.login_and_check()?;
     tracing::warn!("submit-existing：当前状态 {state:?}（忽略，直接尝试提交现成文章）");
 
     let dbg = logging::debug_dir();
-    let pic = screenshot::capture(&url, &title, &dbg, login_cookie(cfg))?;
+    let pic = screenshot::capture(&url, &title, &dbg, login_cookie(cfg), vendor_key)?;
     let meta = std::fs::metadata(&pic).ok();
     tracing::info!("截图就绪 {} 字节，提交中…", meta.as_ref().map(|m| m.len()).unwrap_or(0));
     let result = client.submit_renewal(&url, &pic);
@@ -161,14 +172,15 @@ fn submit_existing(cfg: &AppConfig, run: &RunContext) -> Result<()> {
 }
 
 /// 命中任一 `--test-*` 子命令 → 执行并返回 true（main 提前退出）；否则 false。
+/// 判定顺序 = renew.yml if/elif 优先级（submit > write > zhihu > screenshot > notify）。
 pub fn run_if_probe(cfg: &AppConfig, run: &RunContext) -> Result<bool> {
     // 参数收集一次：原先每判定一个子命令就把整个 argv 重新遍历一遍
     let args: Vec<String> = std::env::args().collect();
     let has = |f: &str| args.iter().any(|a| a == f);
-    if has("--test-notify") { test_notify(cfg, run)?; return Ok(true); }
-    if has("--test-screenshot") { test_screenshot(cfg, run)?; return Ok(true); }
+    if has("--submit-existing") { submit_existing(cfg, run)?; return Ok(true); }
     if has("--test-write") { test_write(cfg, run)?; return Ok(true); }
     if has("--test-zhihu") { test_zhihu(cfg, run)?; return Ok(true); }
-    if has("--submit-existing") { submit_existing(cfg, run)?; return Ok(true); }
+    if has("--test-screenshot") { test_screenshot(cfg, run)?; return Ok(true); }
+    if has("--test-notify") { test_notify(cfg, run)?; return Ok(true); }
     Ok(false)
 }

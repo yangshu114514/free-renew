@@ -28,9 +28,13 @@ impl RunContext {
         let run_id = format!("run-{}", now.replace([':', ' '], "-"));
 
         // 文件日志目录：FREE_RENEW_LOG_DIR > ./logs
+        // 空串按"未设置"处理：`create_dir_all("")` 直接报错会让 main 在任何
+        // 日志输出前就崩，一个手滑的空环境变量就能废掉整轮运行
         let dir = std::env::var("FREE_RENEW_LOG_DIR")
+            .ok()
+            .filter(|d| !d.is_empty())
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("logs"));
+            .unwrap_or_else(|| PathBuf::from("logs"));
         std::fs::create_dir_all(&dir)?;
         let path = dir.join(format!("{run_id}.log.jsonl"));
         let file = std::fs::File::create(&path)?;
@@ -68,9 +72,13 @@ impl RunContext {
 /// 调试产物目录（文章全文、截图、页面 HTML）。
 /// 默认 `/tmp/freerenew-debug`；Actions 侧以该目录整体上传 debug-dump artifact。
 /// 唯一实现放这里：发文与截图两处曾各抄一份默认值，改了环境变量名就会有一处漂移。
+/// 空串=未设置（与 LOG_DIR 同理，防 `create_dir_all("")` 炸截图步骤）。
 pub fn debug_dir() -> PathBuf {
     PathBuf::from(
-        std::env::var("FREE_RENEW_DEBUG_DIR").unwrap_or_else(|_| "/tmp/freerenew-debug".into()),
+        std::env::var("FREE_RENEW_DEBUG_DIR")
+            .ok()
+            .filter(|d| !d.is_empty())
+            .unwrap_or_else(|| "/tmp/freerenew-debug".into()),
     )
 }
 
