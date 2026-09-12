@@ -16,6 +16,7 @@ mod csdn;
 mod file_config;
 mod http;
 mod logging;
+mod markdown;
 mod notify;
 mod probe;
 mod screenshot;
@@ -260,7 +261,7 @@ fn publish_article(cfg: &AppConfig, vendor: &str, article: &writer::Article) -> 
             let client = zhihu::ZhihuClient::new(zh)?;
             client.publish(
                 &article.title,
-                &zhihu::md_to_html(&article.body_markdown),
+                &crate::markdown::to_html(&article.body_markdown, false),
                 &zh.topics,
                 zh.toc,
                 true, // 正式发布

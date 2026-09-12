@@ -17,8 +17,6 @@ use std::time::Duration;
 
 use crate::config::ZhihuConfig;
 
-const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
-                  (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36";
 const ZHUANLAN: &str = "https://zhuanlan.zhihu.com";
 
 pub struct ZhihuClient {
@@ -80,7 +78,7 @@ impl ZhihuClient {
         self.http
             .request(method.clone(), url)
             .header("Cookie", &self.cookie)
-            .header("User-Agent", UA)
+            .header("User-Agent", crate::http::BROWSER_UA)
             .header("Accept", "application/json, text/plain, */*")
             .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
             .header("x-requested-with", "fetch")
@@ -306,44 +304,6 @@ fn urlencode(s: &str) -> String {
     out
 }
 
-/// markdown → 知乎可接受的 HTML（子集：标题/代码块/段落）。
-pub fn md_to_html(md: &str) -> String {
-    let mut out = String::new();
-    let mut in_code = false;
-    for line in md.lines() {
-        if line.starts_with("```") {
-            out.push_str(if in_code { "</code></pre>\n" } else { "<pre><code>" });
-            in_code = !in_code;
-            continue;
-        }
-        if in_code {
-            out.push_str(&html_escape(line));
-            out.push('\n');
-            continue;
-        }
-        if let Some(h) = line.strip_prefix("## ") {
-            out.push_str(&format!("<h2>{}</h2>\n", html_escape(h)));
-        } else if let Some(h) = line.strip_prefix("# ") {
-            // 顶层 # 标题不进正文（知乎另有 title 字段）
-            let _ = h;
-        } else if line.trim().is_empty() {
-            continue;
-        } else {
-            out.push_str(&format!("<p>{}</p>\n", html_escape(line)));
-        }
-    }
-    if in_code {
-        out.push_str("</code></pre>\n");
-    }
-    out
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,14 +328,6 @@ mod tests {
         assert_eq!(cookie_value(c, "_xsrf").as_deref(), Some("ttt%2Bxxx"));
         assert_eq!(pct_decode("ttt%2Bxxx"), "ttt+xxx");
         assert_eq!(cookie_value(c, "nope"), None);
-    }
-
-    #[test]
-    fn md_to_html_basics() {
-        let html = md_to_html("# 标题\n\n正文一段。\n\n## 小节\n- 项目\n");
-        assert!(!html.contains("<h1"));
-        assert!(html.contains("<p>正文一段。</p>"));
-        assert!(html.contains("<h2>小节</h2>"));
     }
 
     #[test]

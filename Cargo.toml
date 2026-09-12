@@ -18,15 +18,11 @@ base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 rand = "0.8"
 anyhow = "1"
-thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# 截图：headless chromium（系统装的 chrome/edge 也行）
+# 截图与知乎发文：headless chromium（系统装的 chrome/edge 也行）
 headless_chrome = "1.0"
-
-# git 操作（publish 文章到 Pages 仓库）
-git2 = { version = "0.18", default-features = false, features = ["https", "ssh"] }
 
 [profile.release]
 opt-level = 3
