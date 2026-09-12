@@ -28,8 +28,10 @@ fn build_cookie_header(acw: Option<&str>, login: Option<&str>) -> HashMap<String
 /// 对文章页截图（挑战感知：先过 WAF 挑战再截），返回截图路径。
 /// `title` 用于验证渲染的是真文章页而非挑战页。
 /// `login_cookie` 来自 config（config.rs 是唯一配置出口），无则 None。
-pub fn capture(url: &str, title: &str, debug_dir: &Path, login_cookie: Option<&str>) -> Result<PathBuf> {
-    let out = debug_dir.join("postpone.png");
+/// `tag` 进产物文件名（postpone-{tag}.png / failed-{tag}.png / page-{tag}.html）：
+/// 两家厂商同日都到期时，后一家不再覆盖前一家的现场，被拒对账才拿得对图。
+pub fn capture(url: &str, title: &str, debug_dir: &Path, login_cookie: Option<&str>, tag: &str) -> Result<PathBuf> {
+    let out = debug_dir.join(format!("postpone-{tag}.png"));
     std::fs::create_dir_all(debug_dir).context("创建截图目录失败")?;
 
     let mut opts = headless_chrome::LaunchOptions {
@@ -61,9 +63,19 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path, login_cookie: Option<&s
     //    注意：本地网络可能经梯子，探测结果不可作准；Actions 环境才是准数。
     tab.enable_stealth_mode()
         .context("注入 stealth 反检测脚本失败")?;
-    tab.set_user_agent(crate::http::BROWSER_UA, Some("zh-CN,zh;q=0.9"), Some("Win32"))
+    // UA 以浏览器**自报**的真实值为准，只剥掉 HeadlessChrome 标记。
+    // 硬编码 UA（曾经的 Chrome/129 + Win32）与 Chrome 自发的 Sec-CH-UA-* 客户端
+    // 提示必然对不上：版本随 runner 升级漂移、平台永远是 Linux。指纹自相矛盾
+    // 比"承认自己是数据中心 headless"更可疑。查询失败才退回常量兜底。
+    let (ua, platform) = match browser.get_version() {
+        Ok(v) if !v.user_agent.is_empty() => {
+            (v.user_agent.replace("HeadlessChrome", "Chrome"), "Linux x86_64")
+        }
+        _ => (crate::http::BROWSER_UA.to_string(), "Win32"),
+    };
+    tab.set_user_agent(&ua, Some("zh-CN,zh;q=0.9"), Some(platform))
         .context("设置 UA 覆盖失败")?;
-    tracing::info!("已启用 stealth 模式 + UA 覆盖");
+    tracing::info!("已启用 stealth 模式 + UA 覆盖: {ua}");
 
     // ── WAF 预解：裸请求拿挑战 → Node 沙箱求解 → acw Cookie 注入 Chrome ──
     let mut acw: Option<String> = None;
@@ -149,10 +161,10 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path, login_cookie: Option<&s
             None,
             true,
         ) {
-            let _ = std::fs::write(debug_dir.join("failed.png"), png);
+            let _ = std::fs::write(debug_dir.join(format!("failed-{tag}.png")), png);
         }
         if let Ok(html) = tab.get_content() {
-            let _ = std::fs::write(debug_dir.join("page.html"), html);
+            let _ = std::fs::write(debug_dir.join(format!("page-{tag}.html")), html);
         }
         bail!("多次导航后文章仍未公开可见（平台审核未完成或不可见），拒绝提交垃圾截图");
     }
@@ -169,7 +181,7 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path, login_cookie: Option<&s
 
     // HTML 存档供诊断
     if let Ok(html) = tab.get_content() {
-        let _ = std::fs::write(debug_dir.join("page.html"), html);
+        let _ = std::fs::write(debug_dir.join(format!("page-{tag}.html")), html);
     }
 
     Ok(out)

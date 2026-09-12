@@ -7,9 +7,23 @@
 //! 只覆盖续期文章用到的子集：#~#### 标题、``` 代码围栏、普通段落。表格/链接/列表不处理
 //! （`- ` 行会成普通段落，知乎/CSDN 均能正常渲染为文字，非阻塞）。
 
-/// HTML 转义（最小集：& < >）。LLM 输出不可信，进 HTML/属性前必须过。
+/// HTML 转义（& < > "）。LLM 输出不可信，进 HTML/属性前必须过。
+/// `"` 必须转：本函数同时用于 `<code class="language-{...}">` 属性上下文，
+/// 只转 &<> 时一个引号就能从属性里越狱。
 pub fn escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// 代码围栏语言标识 → 安全 class 片段：只取首个 token，且仅保留 [A-Za-z0-9_+-]。
+/// 围栏行后面常跟说明文字（```js 用于高亮），且内容出自 LLM——属性值必须消毒。
+fn safe_lang_token(line: &str) -> String {
+    line.split_whitespace()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+'))
+        .take(32)
+        .collect()
 }
 
 /// markdown → HTML。`keep_h1=false` 时丢弃 `# ` 一级标题（知乎标题单独传）。
@@ -21,7 +35,12 @@ pub fn to_html(md: &str, keep_h1: bool) -> String {
             if in_code {
                 out.push_str("</code></pre>\n");
             } else {
-                out.push_str(&format!("<pre><code class=\"language-{}\">", escape(lang)));
+                let cls = safe_lang_token(lang);
+                if cls.is_empty() {
+                    out.push_str("<pre><code>");
+                } else {
+                    out.push_str(&format!("<pre><code class=\"language-{cls}\">"));
+                }
             }
             in_code = !in_code;
             continue;
@@ -83,5 +102,23 @@ mod tests {
     fn unclosed_fence_is_closed() {
         let h = to_html("```\ncode\n", true);
         assert!(h.ends_with("</code></pre>\n"));
+    }
+
+    #[test]
+    fn fence_lang_cannot_escape_class_attribute() {
+        // LLM 围栏行 ```js " onx="1 —— 引号/空格不得原样进属性，否则 XSS 越狱
+        let h = to_html("```js \" onx=\"1\ncode\n```", true);
+        assert!(h.starts_with("<pre><code class=\"language-js\">"), "got: {h}");
+        assert!(!h.contains("onx"));
+        // 非字母数字符号被过滤（rust>"x → rustx）
+        let h2 = to_html("```rust>\"x\ncode\n```", true);
+        assert!(h2.starts_with("<pre><code class=\"language-rustx\">"), "got: {h2}");
+        // 纯符号语言标识 → 消毒后为空 → 不带 class
+        assert!(to_html("```!!!\ncode\n```", true).starts_with("<pre><code>"));
+    }
+
+    #[test]
+    fn escape_covers_quotes() {
+        assert_eq!(escape("a\"b"), "a&quot;b");
     }
 }
