@@ -71,7 +71,7 @@ impl CsdnClient {
         creation_statement: u8,
         publish: bool,
     ) -> Result<String> {
-        let html = markdown_to_simple_html(markdown);
+        let html = crate::markdown::to_html(markdown, true);
         let payload = json!({
             "title": title,
             "content": html,
@@ -138,46 +138,6 @@ impl CsdnClient {
 
 /// markdown → 简易 HTML。CSDN content 字段要 HTML；markdowncontent 字段原样。
 /// 只处理续期文章用到的子集：标题、代码块、段落。
-fn markdown_to_simple_html(md: &str) -> String {
-    let mut out = String::new();
-    let mut in_code = false;
-    for line in md.lines() {
-        if let Some(lang) = line.strip_prefix("```") {
-            if in_code {
-                out.push_str("</pre></code>\n");
-            } else {
-                // lang 会进 HTML 属性，必须转义（LLM 输出不可信）
-                out.push_str(&format!(
-                    "<pre><code class=\"language-{}\">",
-                    html_escape(lang)
-                ));
-            }
-            in_code = !in_code;
-            continue;
-        }
-        if in_code {
-            out.push_str(&format!("{}\n", html_escape(line)));
-            continue;
-        }
-        if let Some(h) = line.strip_prefix("### ") {
-            out.push_str(&format!("<h3>{}</h3>\n", html_escape(h)));
-        } else if let Some(h) = line.strip_prefix("## ") {
-            out.push_str(&format!("<h2>{}</h2>\n", html_escape(h)));
-        } else if let Some(h) = line.strip_prefix("# ") {
-            out.push_str(&format!("<h1>{}</h1>\n", html_escape(h)));
-        } else if line.trim().is_empty() {
-            continue;
-        } else {
-            out.push_str(&format!("<p>{}</p>\n", html_escape(line)));
-        }
-    }
-    out
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,14 +150,5 @@ mod tests {
         let client = CsdnClient::new("k=v", DEFAULT_APP_SECRET, DEFAULT_X_CA_KEY);
         let sig = client.sign("POST", "*/*", "application/json", "939abdaa-0bdd-4eba-a720-e8fc0b151621", "/blog-console-api/v3/mdeditor/saveArticle");
         assert_eq!(sig.len(), 44, "HMAC-SHA256 base64 应为 44 字符: {sig}");
-    }
-
-    #[test]
-    fn md_to_html_basic() {
-        let html = markdown_to_simple_html("# T\n## H\n正文\n```rust\nfn a(){}\n```\n尾行");
-        assert!(html.contains("<h1>T</h1>"));
-        assert!(html.contains("<h2>H</h2>"));
-        assert!(html.contains("language-rust"));
-        assert!(html.contains("<p>尾行</p>"));
     }
 }
