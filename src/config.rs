@@ -226,24 +226,25 @@ impl AppConfig {
             });
 
         // ---- 知乎发文配置：env ZHIHU_COOKIES 优先，文件兜底 ----
+        // ZHIHU_TOPICS：空格分隔的话题候选；空串按"未设置"处理（回落到默认池）。
+        // 两条分支（有文件段 / 纯 env）语义相同，解析只写一处，避免改一处漏一处。
+        let env_topics = || {
+            env("ZHIHU_TOPICS")
+                .map(|s| s.split_whitespace().map(String::from).collect::<Vec<String>>())
+                .filter(|v| !v.is_empty())
+        };
         let zhihu = file
             .as_ref()
             .and_then(|f| f.platform.zhihu.clone())
             .map(|z| ZhihuConfig {
                 cookie: env("ZHIHU_COOKIES").unwrap_or(z.cookie),
-                topics: env("ZHIHU_TOPICS")
-                    .map(|s| s.split_whitespace().map(String::from).collect())
-                    .filter(|v: &Vec<String>| !v.is_empty())
-                    .unwrap_or(z.topics),
+                topics: env_topics().unwrap_or(z.topics),
                 toc: z.toc,
             })
             .or_else(|| {
                 env("ZHIHU_COOKIES").map(|cookie| ZhihuConfig {
                     cookie,
-                    topics: env("ZHIHU_TOPICS")
-                        .map(|s| s.split_whitespace().map(String::from).collect())
-                        .filter(|v: &Vec<String>| !v.is_empty())
-                        .unwrap_or_else(crate::file_config::default_zhihu_topics),
+                    topics: env_topics().unwrap_or_else(crate::file_config::default_zhihu_topics),
                     toc: false,
                 })
             });

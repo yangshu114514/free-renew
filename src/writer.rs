@@ -36,7 +36,7 @@ const COMPETITOR_WORDS: &[&str] = &[
 /// 反向代理/官方文档/CDN节点"这类正当技术词（故不收单字"墙""政"、不收"代理/节点/官方"）。
 const SENSITIVE_WORDS: &[&str] = &[
     // 翻墙 / 境外接入（这些是独立灰产词，不会与正当技术词混淆）
-    "翻墙", "科学上网", "上网梯子", "梯子", "机场", "魔法", "境外访问", "墙外", "GFW",
+    "翻墙", "科学上网", "上网梯子", "梯子", "机场", "魔法上网", "境外访问", "墙外", "GFW",
     "内网穿透", "frp", "frpc", "frps", "ngrok", "sunny-ngrok",
     // 规避备案 / 灰产用途
     "免备案", "无需备案", "不备案", "免实名", "站群", "泛站", "寄生", "钓鱼", "仿站",
@@ -44,6 +44,18 @@ const SENSITIVE_WORDS: &[&str] = &[
     // 政治 / 舆情敏感
     "政府", "领导人", "制裁", "删帖", "维权", "上访", "舆情", "谣言", "异见",
 ];
+
+/// 雷区词命中检测：**ASCII 部分大小写不敏感**。模型经常把灰产词写成大写强调
+/// （FRP / Ngrok / GFW），逐字面匹配会整条漏网——这是"一票否决"红线，不能漏。
+/// 中文词无大小写，统一走同一路径；`to_lowercase` 对中文是恒等变换。
+fn sensitive_hits(text: &str) -> Vec<&'static str> {
+    let lowered = text.to_lowercase();
+    SENSITIVE_WORDS
+        .iter()
+        .filter(|w| lowered.contains(&w.to_lowercase()))
+        .copied()
+        .collect()
+}
 
 /// 默认生成角度池：每个角度都落在规范结构内（开篇纠偏→实测→清单→适用→指引），
 /// 只换"本次更新的由头"，保证系列文章互相不像模板。
@@ -177,7 +189,7 @@ const AI_TELLS: &[&str] = &[
 fn validate(text: &str, vendor: &str, required: &[String], forbidden: &[String]) -> Vec<String> {
     // 内容审核雷区：一票否决，绝不发布（命中直接返回，逼重写；连续命中会耗尽重试
     // 而放弃本轮，也好过把擦边文发上平台砸账号）。
-    let hits: Vec<&str> = SENSITIVE_WORDS.iter().filter(|w| text.contains(**w)).copied().collect();
+    let hits = sensitive_hits(text);
     if !hits.is_empty() {
         return vec![format!(
             "含内容审核雷区词（一票否决，勿发）：{}——改用无害技术词重写",
@@ -257,13 +269,19 @@ pub fn generate_article(llm: &LlmConfig, vendor: &str) -> Result<Article> {
     let mut personas: Vec<&(&str, &str)> = PERSONA_SEEDS.iter().collect();
     personas.shuffle(&mut rng);
 
-    for (attempt, _ignored) in (0..llm.max_retries).enumerate() {
+    for attempt in 0..llm.max_retries as usize {
         let angle = llm
             .angles
             .choose(&mut rng)
             .map(String::as_str)
             .unwrap_or("写一次通用的使用体验");
-        let length = llm.lengths.choose(&mut rng).copied().unwrap_or(400);
+        // 字数池为空只可能来自手写配置（config.rs 已兜默认），兜到池内首档；
+        // 不编一个池外的 400——那与本文件声明的 1250-1750 区间自相矛盾
+        let length = llm
+            .lengths
+            .choose(&mut rng)
+            .copied()
+            .unwrap_or(DEFAULT_LENGTHS[0]);
         let persona = personas[attempt % personas.len()];
 
         let user = user_prompt(angle, length, vendor, &required, &llm.forbidden_words, *persona);
@@ -362,6 +380,39 @@ mod tests {
         assert!(problems.iter().any(|p| p.contains("审核雷区")), "应命中敏感词: {problems:?}");
         // 一票否决：即使别的都没有也不该放行
         assert!(!problems.is_empty());
+    }
+
+    #[test]
+    fn sensitive_words_are_case_insensitive() {
+        // 模型爱用大写强调灰产词（FRP/Ngrok/GFW）；逐字面比对会整条漏网，
+        // 而这是一票否决红线——漏一次就是账号收违规警告（2026-09-12 事故）。
+        for raw in ["顺手用 FRP 打洞", "Ngrok 挺好用", "当年研究过 GFW", "自建 Frp 服务"] {
+            let mut s = ok_body();
+            s.push_str(raw);
+            let problems = validate(&s, "三丰云", &[], &[]);
+            assert!(
+                problems.iter().any(|p| p.contains("审核雷区")),
+                "大小写变体漏网: {raw} → {problems:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn magic_number_is_not_a_sensitive_hit() {
+        // "魔法数字"是编程惯用语（magic number），跟灰产隐语不是一回事。
+        // 词表若只收"魔法"，一句正常的配置点评就会让整轮续期作废——
+        // 误杀的代价同样是"这轮没续上"，所以红线词也要按最窄语义收。
+        let mut ok = ok_body();
+        ok.push_str("配置里尽量别留魔法数字，抽成具名常量更好维护");
+        let problems = validate(&ok, "三丰云", &[], &[]);
+        assert!(!problems.iter().any(|p| p.contains("审核雷区")), "误杀正当技术词: {problems:?}");
+
+        // 但它作为灰产隐语出现时必须照样拦下
+        let mut bad = ok_body();
+        bad.push_str("顺便聊聊魔法上网那些事");
+        assert!(validate(&bad, "三丰云", &[], &[])
+            .iter()
+            .any(|p| p.contains("审核雷区")), "灰产语境漏网");
     }
 
     #[test]
