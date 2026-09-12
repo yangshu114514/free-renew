@@ -17,7 +17,7 @@
   .\scripts\refresh-zhihu-cookie.ps1 -SelfTest   # 仅体检：编译 CDP 客户端 + 查依赖/路径，不启动浏览器、不动登录态
 #>
 [CmdletBinding()]
-param([switch]$SelfTest)
+param([switch]$SelfTest, [switch]$NoSecretPush)
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -207,10 +207,12 @@ try {
         if ($u -match "github\.com[:/](.+?)(\.git)?/?$") { $repoSlug = $Matches[1] }
     }
 } catch {}
-if ($hasGh -and $repoSlug) {
+if ($NoSecretPush) {
+    Write-Host "   (调用方要求不直传 Secret：Cookie 已存 $OutFile，交由上层统一写入)"
+} elseif ($hasGh -and $repoSlug) {
     $ans = Read-Host "   检测到 gh CLI + 仓库 $repoSlug，直接更新 Secret ZHIHU_COOKIES? (y/n)"
     if ($ans -eq "y") {
-        gh secret set ZHIHU_COOKIES --body $singleLine --repo $repoSlug
+        $singleLine | gh secret set ZHIHU_COOKIES --repo $repoSlug   # 走 stdin，免疫 PS5.1 参数引用坑
         if ($LASTEXITCODE -eq 0) { Write-Host "   ✅ Secret ZHIHU_COOKIES 已更新，下次 Actions 运行即生效" }
         else { Write-Host "   gh secret set 失败，请手动复制 $OutFile 内容去 Settings→Secrets 添加" }
     }
