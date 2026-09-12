@@ -8,9 +8,10 @@
 //! - `--test-write [vendor]`  只生成样文并打印（不发文、不碰知乎/厂商），验内容质量
 //! - `--test-zhihu [vendor]`  知乎发文链路探路：建草稿+写正文+挂话题，**不发布**，返回编辑链接
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use serde_json::json;
 
+use crate::cloud;
 use crate::config::AppConfig;
 use crate::logging::RunContext;
 use crate::{login_cookie, notify, screenshot, writer, zhihu};
@@ -114,6 +115,57 @@ fn test_zhihu(cfg: &AppConfig, run: &RunContext) -> Result<()> {
     Ok(())
 }
 
+/// `--submit-existing <vendor> <url> [title]`：复用一篇**已发布**的文章，只做
+/// 登录厂商 → 截图该 URL → 提交续期，**绝不重新生成/重新发布**。
+/// 用途：当知乎/CSDN 已成功发文、却卡在"上传截图到厂商"这一步的网络抖动时，
+/// 用现成文章反复重试提交，避免每试一次就往你内容平台多灌一篇、多赌一次风控。
+fn submit_existing(cfg: &AppConfig, run: &RunContext) -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    let pos = args.iter().position(|a| a == "--submit-existing").unwrap();
+    let vendor = args.get(pos + 1).cloned().unwrap_or_else(|| "三丰云".into());
+    let url = args
+        .get(pos + 2)
+        .cloned()
+        .filter(|s| !s.starts_with("--"))
+        .ok_or_else(|| anyhow::anyhow!("--submit-existing 需要文章 URL"))?;
+    let title = args.get(pos + 3).cloned().unwrap_or_default();
+
+    let account = cfg
+        .accounts
+        .iter()
+        .find(|a| a.profile.name == vendor || a.profile.key == vendor)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("未配置厂商账号 {vendor}（*_USERNAME/PASSWORD）"))?;
+
+    let mut client = cloud::CloudClient::new(account, cfg.http_timeout);
+    // 登录只为建立会话；状态不拦提交（冗余提交比漏提交安全）。
+    let (state, ..) = client.login_and_check()?;
+    tracing::warn!("submit-existing：当前状态 {state:?}（忽略，直接尝试提交现成文章）");
+
+    let dbg = debug_dir();
+    let pic = screenshot::capture(&url, &title, &dbg, login_cookie(cfg))?;
+    let meta = std::fs::metadata(&pic).ok();
+    tracing::info!("截图就绪 {} 字节，提交中…", meta.as_ref().map(|m| m.len()).unwrap_or(0));
+    let result = client.submit_renewal(&url, &pic);
+    match result {
+        Ok(r) if r.ok => {
+            run.event("submit_existing", "submitted", json!({"vendor": vendor, "url": url, "raw": r.raw}));
+            notify::send(&cfg.notify, &format!("{vendor} 续期已提交(复用文章)"), &format!("文章: {url}\n现成文章重试提交成功，等待厂商人工审核。"));
+            println!("✅ 提交成功：{url}");
+            Ok(())
+        }
+        Ok(r) => {
+            run.event("submit_existing", "rejected", json!({"vendor": vendor, "raw": r.raw}));
+            bail!("提交被厂商拒绝：{}", r.raw)
+        }
+        Err(e) => {
+            let d = format!("{e:#}");
+            run.event("submit_existing", "failed", json!({"vendor": vendor, "error": &d}));
+            bail!("提交失败（网络/接口）：{d}")
+        }
+    }
+}
+
 /// 命中任一 `--test-*` 子命令 → 执行并返回 true（main 提前退出）；否则 false。
 pub fn run_if_probe(cfg: &AppConfig, run: &RunContext) -> Result<bool> {
     let has = |f: &str| std::env::args().any(|a| a == f);
@@ -121,5 +173,6 @@ pub fn run_if_probe(cfg: &AppConfig, run: &RunContext) -> Result<bool> {
     if has("--test-screenshot") { test_screenshot(cfg, run)?; return Ok(true); }
     if has("--test-write") { test_write(cfg, run)?; return Ok(true); }
     if has("--test-zhihu") { test_zhihu(cfg, run)?; return Ok(true); }
+    if has("--submit-existing") { submit_existing(cfg, run)?; return Ok(true); }
     Ok(false)
 }
