@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   free-renew 交互式安装向导：Fork → Secrets → CSDN Cookie → 定时 → 首跑
@@ -73,9 +73,15 @@ if ($inRepo -and $repo -and $repo -ne $UPSTREAM) {
     Ok "仓库就绪: $repo"
 }
 $repoArg = @("--repo", $repo)
+# 注意：gh secret/variable set 的 --body 必须直接给值；`--body -` 会把值存成
+# 字面量 "-"（gh 只在“不提供 --body”时才从 stdin 读）。历史 bug 曾让所有 Secret 被写成 "-"。
 function Set-GhSecret($name, $value) {
-    $value | gh secret set $name --body - @repoArg
+    gh secret set $name --body $value @repoArg
     if ($LASTEXITCODE -eq 0) { Ok "Secret $name 已写入" } else { Die "Secret $name 写入失败" }
+}
+function Set-GhVar($name, $value) {
+    gh variable set $name --body $value @repoArg
+    if ($LASTEXITCODE -eq 0) { Ok "Variable $name = $value" } else { Die "Variable $name 写入失败" }
 }
 
 # ── [2/6] 云账号 ─────────────────────────────────────────────
@@ -114,29 +120,49 @@ Set-GhSecret "LLM_API_KEY"   $llmKey
 Set-GhSecret "LLM_MODEL"     $llmModel
 Ok "LLM 配置完成"
 
-# ── [4/6] CSDN Cookie ────────────────────────────────────────
-Step 4 "CSDN Cookie（发文平台登录态）"
-$cookieFile = Join-Path $env:TEMP "csdn_cookies_oneline.txt"
-# 先删旧文件：防止刷新脚本失败时把上一次运行的残留 Cookie 当新 Cookie 写入
-Remove-Item $cookieFile -Force -ErrorAction SilentlyContinue
-$scriptPath = Join-Path (Get-Location) "scripts\refresh-csdn-cookie.ps1"
-if (Test-Path $scriptPath) {
-    Write-Host "即将弹出浏览器: 扫码登录 CSDN（专用 profile，登录态会保留供日后刷新）"
-    & $scriptPath
-} elseif (Test-Path (Join-Path (Get-Location) "scripts/refresh-csdn-cookie.ps1")) {
-    & (Join-Path (Get-Location) "scripts/refresh-csdn-cookie.ps1")
+# ── [4/6] 发文平台 ───────────────────────────────────────────
+Step 4 "选择发文平台并采集其登录 Cookie"
+Write-Host @"
+续期需把体验文章发布到一个第三方内容平台，厂商人工审核该文章 URL。支持两种：
+  1 = CSDN   （默认。需已开通博客的 CSDN 号；Cookie 用脚本自动采集，较省心）
+  2 = 知乎   （需发帖正常、有权重的知乎号）
+        ⚠️ 知乎在 GitHub Actions 机房 IP 上自动发帖，有触发风控/影响账号的
+           实质风险，代码只能做到“弹验证码即停”，画像风险无法消除。号很重要请选 1。
+"@ -ForegroundColor Gray
+$platform = Read-Host "选择发文平台 (默认 1=CSDN)"
+if ($platform -eq "") { $platform = "1" }
+
+function Get-PlatformCookie($label, $refreshRel, $cookieFile) {
+    Remove-Item $cookieFile -Force -ErrorAction SilentlyContinue
+    $refresh = Join-Path (Get-Location) $refreshRel
+    if (-not (Test-Path $refresh)) { Die "找不到 $refreshRel（请在完整仓库目录内运行本向导）" }
+    Write-Host "即将弹出专用浏览器：请在其中登录 $label（登录态保留在独立 profile，供日后刷新）"
+    & $refresh
+    if (-not (Test-Path $cookieFile)) { Die "Cookie 文件未产出，请重跑本向导或手动执行 $refreshRel" }
+    $age = ((Get-Date) - (Get-Item $cookieFile).LastWriteTime).TotalMinutes
+    if ($age -gt 2) { Die "Cookie 文件是 $([math]::Round($age)) 分钟前的残留，疑似本次刷新失败，请重跑" }
+    (Get-Content $cookieFile -Raw).Trim()
+}
+
+if ($platform -eq "2") {
+    $ack = Read-Host "确认已了解知乎机房 IP 风控风险并继续? (y/N)"
+    if ($ack -notmatch "^[yY]") { Die "已取消。如改用 CSDN，请重跑本向导并选 1" }
+    Set-GhVar "PLATFORM_PROVIDER" "zhihu"
+    $ck = Get-PlatformCookie "知乎" "scripts\refresh-zhihu-cookie.ps1" (Join-Path $env:TEMP "zhihu_cookies_oneline.txt")
+    Set-GhSecret "ZHIHU_COOKIES" $ck
+    $topics = Read-Host "知乎发文话题（空格分隔，回车用默认 '免费云服务器 虚拟主机'）"
+    if ($topics.Trim() -ne "") { Set-GhVar "ZHIHU_TOPICS" $topics.Trim() }
+    $chosenPlatform = "知乎"
+    $chosenRefresh  = "scripts/refresh-zhihu-cookie.ps1"
+    Ok "发文平台 = 知乎（Cookie 已入 Secret ZHIHU_COOKIES）"
 } else {
-    Die "找不到 scripts/refresh-csdn-cookie.ps1（请在完整仓库目录内运行本向导）"
+    Set-GhVar "PLATFORM_PROVIDER" "csdn"
+    $ck = Get-PlatformCookie "CSDN" "scripts\refresh-csdn-cookie.ps1" (Join-Path $env:TEMP "csdn_cookies_oneline.txt")
+    Set-GhSecret "CSDN_COOKIES" $ck
+    $chosenPlatform = "CSDN"
+    $chosenRefresh  = "scripts/refresh-csdn-cookie.ps1"
+    Ok "发文平台 = CSDN（Cookie 已入 Secret CSDN_COOKIES；寿命数月，过期会告警提醒）"
 }
-if (-not (Test-Path $cookieFile)) {
-    Die "Cookie 文件未产出。请重跑本向导或手动执行 scripts/refresh-csdn-cookie.ps1"
-}
-$cookieAge = ((Get-Date) - (Get-Item $cookieFile).LastWriteTime).TotalMinutes
-if ($cookieAge -gt 2) {
-    Die "Cookie 文件是 $([math]::Round($cookieAge)) 分钟前的残留，疑似本次刷新失败。请重跑。"
-}
-Set-GhSecret "CSDN_COOKIES" (Get-Content $cookieFile -Raw).Trim()
-Ok "CSDN Cookie 完成（寿命数月；如配置了通知渠道，过期时会收到提醒）"
 
 # ── [5/6] 通知 ───────────────────────────────────────────────
 $notifyStatus = "未配置"
@@ -203,7 +229,7 @@ function Mask($s) { if ($s.Length -ge 5) { $s.Substring(0,3) + "****" + $s.Subst
 Write-Host "三丰云:   $(Mask $sfUser)"
 Write-Host "阿贝云:   $(Mask $abUser)"
 Write-Host "LLM:      $llmModel @ $($llmBase)"
-Write-Host "CSDN:     Cookie 已入 Secrets"
+Write-Host "发文平台: $chosenPlatform（Cookie 已入 Secrets）"
 Write-Host "通知:     $notifyStatus"
 Write-Host "定时:     每天 $t:30 北京时间"
 Write-Host ""
@@ -253,7 +279,7 @@ Write-Host ""
 Write-Host "🎉 部署完成！" -ForegroundColor Green
 Write-Host @"
 后续你唯一可能要做的事:
-  • CSDN Cookie 过期(数月后) → 收到通知提醒(需已配置通知渠道) → 重跑 scripts/refresh-csdn-cookie.ps1
+  • 发文平台 Cookie 过期($chosenPlatform；数月一次) → 收到通知提醒(需已配通知) → 重跑 $chosenRefresh
   • 密码轮换 → 仓库 Settings→Secrets 直接改
   • 一切正常时它只是每天定时默默看一眼，没到期 4 秒退出
 到期日临近或出现异常时，若已配置通知渠道，你会收到提醒。

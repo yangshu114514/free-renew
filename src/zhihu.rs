@@ -137,7 +137,7 @@ impl ZhihuClient {
         {
             let mut attached: Vec<String> = vec![];
             for topic in topics.iter().take(3) {
-                match self.attach_topic(&id, topic, &mut attached) {
+                match self.attach_topic(&id, topic, &attached) {
                     Ok(Some(name)) => attached.push(name),
                     Ok(None) => tracing::warn!("话题“{topic}”无安全匹配或已重复，跳过"),
                     Err(e) => tracing::warn!("挂话题“{topic}”失败（继续尝试发布）: {e}"),
@@ -199,7 +199,7 @@ impl ZhihuClient {
 
     /// 挂话题。成功返回 Some(知乎侧真实话题名)；无安全匹配返回 None；网络/HTTP 错误 Err。
     /// 已挂在 `attached` 里的话题名会被跳过（返回 None）。
-    fn attach_topic(&self, id: &str, topic: &str, attached: &mut Vec<String>) -> Result<Option<String>> {
+    fn attach_topic(&self, id: &str, topic: &str, attached: &[String]) -> Result<Option<String>> {
         let q = urlencode(topic);
         let resp = self
             .req(

@@ -1,173 +1,168 @@
-# 安装指南（一键部署 free-renew）
+# 安装与运维指南
 
-> 目标：从零开始，10 分钟内让两台免费服务器进入自动续期状态，并可选配置通知渠道（出事时提醒你）。
+从零到"两台免费服务器进入自动续期"，约 10 分钟。本文件是完整手册；日常最简路径看 README 即可。
+
+## 工作原理（一句话）
+
+GitHub Actions 每天定时拉起本仓库的 Rust 二进制：登录云厂商查续期状态，没到期几秒退出；到期则用 LLM 生成一篇体验文章 → 发布到**内容平台** → 浏览器截图 → 连同截图提交给厂商人工审核。成功/失败通过你配置的通知渠道告警（不配则仅 Actions 页可见）。
+
+发文这一步支持 **CSDN** 和 **知乎** 两个平台，二选一，安装时选、之后可换。
 
 ## 前置条件
 
-| 需要 | 说明 | 检查命令 |
-|---|---|---|
-| Rust 工具链 | 只在开发机需要；纯部署可跳过（GitHub Actions 每次运行时远程构建） | `cargo --version` |
-| Git | 已登录（https 方式需 credential manager，ssh 需 key） | `git --version` |
-| GitHub CLI（可选） | 直传 Secrets 用；没有就手动网页配置 | `gh auth status` |
-| 云账号 | 阿贝云 / 三丰云 控制台账密 | — |
-| CSDN 账号 | 已开通博客功能（新号先去 blog.csdn.net 完成开通） | — |
-| LLM API | 任何 OpenAI 兼容接口（base_url + key + model） | — |
+| 需要 | 说明 |
+|---|---|
+| Git（已登录 GitHub） | `gh auth login` 或 credential manager / SSH key |
+| GitHub CLI（可选） | 装脚本/直传 Secrets 用；没有则全程网页手填 |
+| 云账号 | 阿贝云 / 三丰云 控制台账密 |
+| 发文平台账号 | CSDN（需已开通博客）**或** 知乎（发帖正常的号） |
+| LLM API | 任何 OpenAI 兼容接口：base_url + key + model |
+| Rust 工具链 | 仅本地开发/测试需要；纯部署可跳过（Actions 远程构建） |
 
-## 一键安装流程
+## 推荐：一键安装向导（Windows）
 
-### 第 1 步：Fork + Clone
+```powershell
+irm https://raw.githubusercontent.com/yangshu114514/free-renew/main/install.ps1 | iex
+```
+
+向导按 6 步问答完成全部配置：仓库 fork/clone → 云账号 Secrets → LLM → **选发文平台并采集其 Cookie** → 通知 → 定时与首跑。约 5 分钟。
+
+下面手动流程与向导等价，供 Linux/macOS 或想逐步操作的人。
+
+---
+
+## 手动安装
+
+### 1. Fork + Clone
+
+在 GitHub 网页 **Fork** 本仓库到你名下，**保持 Private**（Secrets 存你名下；Public 会让 Actions 日志可能被公开，见安全清单）。
 
 ```bash
-# GitHub 网页上 Fork 本仓库到你名下（保持 Private！ Secrets 里有凭据）
 git clone https://github.com/<你的用户名>/free-renew.git
 cd free-renew
 ```
 
-### 第 2 步：本地构建（可选，用于本地测试）
+（可选，本地测试才需要）`cargo build --release && ./target/release/free-renew --help`
+
+### 2. 填云账号 + LLM Secrets
+
+用 gh CLI（每条一个 Secret），或在 **Settings → Secrets and variables → Actions** 网页逐条添加。字段对照见 [config.example.toml](../config.example.toml)。
 
 ```bash
-cargo build --release
-./target/release/free-renew --help
+gh secret set SANFENGYUN_USERNAME --body "手机号"
+gh secret set SANFENGYUN_PASSWORD --body "密码"
+gh secret set ABEIYUN_USERNAME    --body "手机号"
+gh secret set ABEIYUN_PASSWORD    --body "密码"
+gh secret set LLM_BASE_URL        --body "https://api.example.com/v1"
+gh secret set LLM_API_KEY         --body "sk-..."
+gh secret set LLM_MODEL           --body "模型名"
 ```
 
-### 第 3 步：填 Secrets
+> ⚠️ 用 gh 设 Secret 时，值必须用 `--body "实际值"` 直接给；`--body -` 会把 Secret 存成字面量 `-`（gh 只在完全不给 `--body` 时才读 stdin）。
 
-**方式 A：gh CLI（推荐）**
+### 3. 选发文平台（二选一）
+
+平台由仓库 **Variable** `PLATFORM_PROVIDER` 决定（默认 `csdn`）：
 
 ```bash
-# 云账号（每家一条命令）
-gh secret set SANFENGYUN_USERNAME --body "你的手机号"
-gh secret set SANFENGYUN_PASSWORD --body "你的密码"
-gh secret set ABEIYUN_USERNAME --body "你的手机号"
-gh secret set ABEIYUN_PASSWORD --body "你的密码"
-
-# LLM
-gh secret set LLM_BASE_URL --body "https://api.example.com/v1"
-gh secret set LLM_API_KEY --body "sk-..."
-gh secret set LLM_MODEL --body "模型名"
-
-# CSDN Cookie：用刷新脚本产出，见第 4 步；或手动：
-gh secret set CSDN_COOKIES --body "UserName=xxx; UserToken=xxx; ..."
+gh variable set PLATFORM_PROVIDER --body "csdn"    # 或 zhihu
 ```
 
-**方式 B：网页** → 仓库 Settings → Secrets and variables → Actions → New repository secret，逐条添加（字段对照见 config.example.toml 注释）。
+#### 平台 A：CSDN
 
-### 第 4 步：采集 CSDN Cookie
+1. 确保 CSDN 号已开通博客（先去 blog.csdn.net 完成开通）。
+2. 采集 Cookie（会弹专用浏览器，扫码/登录后自动导出）：
 
 ```powershell
-# Windows（推荐，专用 profile 保登录态，日常刷新零操作）
-.\scripts\refresh-csdn-cookie.ps1
-# 弹出浏览器 → 扫码登录 → 脚本自动导出 → 问你是否直传 Secret，按 y
+.\scripts\refresh-csdn-cookie.ps1     # Windows；结束时按 y 直传 Secret CSDN_COOKIES
 ```
 
-Linux/macOS：`cargo run --release --bin csdn_cookie_export`（功能相同）。
+Linux/macOS：`cargo run --release --bin csdn_cookie_export`，把打印的单行 Cookie 存进 Secret `CSDN_COOKIES`。
 
-### 选知乎发文路线（可选，替代 CSDN）
+#### 平台 B：知乎
 
-如果你 CSDN 号权重低、AI 文老被机审删除，可改用**知乎**（需一个发帖正常、有
-权重的号）。三丰云/阿贝云认可知乎文章 URL 作为续期凭证。
+> ⚠️ **账号风险须知**：知乎路线在 GitHub Actions 的**机房 IP** 上、用你的登录态自动发帖，与"你本人家用 IP"画像差异大，可能触发风控/验证、严重时影响账号。**代码只能做到"命中验证码/403 即停且不重试"**，画像层面的风险无法由代码消除。号很重要就选 CSDN。
 
-**1）切换平台**：仓库 Settings → Secrets and variables → **Variables** → New：
-
-- 名字 `PLATFORM_PROVIDER`，值 `zhihu`
-- （可选）名字 `ZHIHU_TOPICS`，值如 `云服务器 Linux`（空格分隔；不设则用默认）
-
-**2）采集知乎 Cookie（推荐用脚本，自动搞定 httpOnly 的 z_c0）**：
-
-知乎登录态命脉 `z_c0` 是 httpOnly，浏览器 F12 / `document.cookie` **都抓不到**，
-所以用专用脚本走 Chrome 的 CDP 通道读取：
+1. 切换平台：`gh variable set PLATFORM_PROVIDER --body "zhihu"`
+2. 采集 Cookie：知乎登录态 `z_c0` 是 **httpOnly**，浏览器 F12 / `document.cookie` 抓不全，必须用脚本走 Chrome CDP 通道：
 
 ```powershell
-.\scripts\refresh-zhihu-cookie.ps1
-# 弹出知乎登录页 → 你扫码/手机号登录 → 脚本自动检测 z_c0 → 导出 → 问你是否直传 Secret，按 y
+.\scripts\refresh-zhihu-cookie.ps1    # 弹知乎登录页→登录→自动抓 z_c0→按 y 直传 Secret
 ```
 
-产物在 `%TEMP%\zhihu_cookies_oneline.txt`；在 free-renew 仓库目录里跑且装了 gh CLI，
-会直接更新 Secret `ZHIHU_COOKIES`。
+备用手动法：F12 → **Network** → 刷新 → 点任一 zhihu.com 请求 → Request Headers → 复制整行 `Cookie:` → `gh secret set ZHIHU_COOKIES --body "z_c0=...; _xsrf=...; d_c0=...; q_c1=..."`。
 
-> 备用手动法（脚本不便时）：F12 → **Network** 标签 → 刷新页面 → 点任意发往
-> zhihu.com 的请求 → Request Headers → 复制 `Cookie:` 整行（含 httpOnly）→
-> `gh secret set ZHIHU_COOKIES --body "z_c0=...; _xsrf=...; d_c0=...; q_c1=..."`。
+3. 话题（可选）：`gh variable set ZHIHU_TOPICS --body "免费云服务器 虚拟主机"`（空格分隔，不设用此默认）。知乎发文通常必须挂话题，脚本会精确匹配并自动排除带其它云品牌名的话题。
 
-**3）探路验证（强烈建议先跑，别直接公开发帖）**：先用草稿探路确认鉴权/接口通、
-内容质量过关且不触发验证码——在 Actions 手动 Run，`test_zhihu` 填厂商名（如 `三丰云`）。
-该轮只建草稿+写正文+挂话题、停在发布前，日志给出草稿编辑链接，自己打开核对。
-确认干净后，再设 `PLATFORM_PROVIDER=zhihu` 走正式自动续期。
+### 4. 通知（可选，强烈建议）
 
-> ⚠️ **账号风控风险（务必知情）**：本工具默认在 GitHub Actions 的微软数据中心
-> IP 上、用你的知乎登录态自动发帖。这与"你本人平时登录的家用 IP"画像差异很大，
-> 知乎风控可能弹出验证、限制发帖，严重时影响账号。**这是拿你的号在冒险**。
-> 代码层面已做保护：一旦命中 401/403/验证码就**立刻停止且不重试**（反复撞风控
-> 才会真把号搞封），并通过通知告知你。但"自动 + 机房 IP"这个根本画像的风险
-> 无法由代码消除。若你的号很重要，优先考虑半自动（生成好草稿、你手动点发布）。
+没有通知 = 出事你不知道。二选一：
 
-### 第 5 步：通知（可选但强烈建议）
+- **OpenClaw → 微信**（你有一台跑 OpenClaw 的服务器）：见下节。
+- **通用 Webhook**（Server酱 / 企业微信机器人 / Bark…）：`gh secret set NOTIFY_WEBHOOK_URL --body "https://…"`
 
-没有通知 = 出了事你不知道。两种接法：
+（完全不配也能跑，失败只体现在 Actions 页红叉。）
 
-- **OpenClaw 用户**：参考下方"OpenClaw 网关通知"一节配置，微信直收
-- **其他**：任意能收 POST JSON 的 webhook（Server酱、企业微信机器人、Bark…），
-  填 `NOTIFY_WEBHOOK_URL`
+### 5. 首跑验证
 
-### 第 6 步：点火验证
+知乎路线**强烈建议先探路**：Actions 页 Run workflow，`test_zhihu` 填 `三丰云`——只建草稿不发布，日志给出草稿编辑链接，你亲自核对内容质量与话题无误、且不触发验证码。确认干净后再正式用。
 
-仓库 Actions 页 → 选 free-server-renewal → Run workflow。
-第一次跑 = Linux 编译（~4 分钟）+ 真实登录查状态。绿了就完事，之后每天 09:30（北京时间）自动检查。
+（想只看生成质量、连草稿都不建：`test_write` 填厂商名，样文打进日志。）
+
+正式点火：Actions → free-server-renewal → Run workflow。首次含 Linux 编译约 4 分钟。绿了之后，按仓库 cron（默认每天 09:30 北京时间）自动检查；没到期 4 秒退出。
+
+---
 
 ## OpenClaw 网关通知（微信直收）
 
-硬性要求只有两条：
+硬性要求两条：① 服务器的 `/v1/chat/completions` 端点**能被 Actions 从公网访问**（公网直连 / frp / Cloudflare Tunnel / 其他隧道均可，示例用 Tunnel + 反代）；② 端点**必须带认证**（basic auth，htpasswd 建一个专用 bot 用户，别用你本人的——公网无认证等于把你的 agent 指令入口敞开）。
 
-1. 跑着 OpenClaw 的服务器的 `/v1/chat/completions` 端点**能被 GitHub Actions 从公网访问到**——怎么暴露随你（公网 IP 直连、frp、Cloudflare Tunnel、其他隧道均可，下文步骤以作者自用的 Cloudflare Tunnel + 反代为例）
-2. 端点**必须带认证**——暴露在公网的网关没有认证，任何人都相当于拿到了你 agent 的指令入口。basic auth 是最低要求（htpasswd 加专用 bot 用户，别用你本人的）
+1. 网关配置开启：`"gateway": { "http": { "endpoints": { "chatCompletions": { "enabled": true } } } }`
+2. 反代给 `/v1/` 加 basic auth（用其它暴露方式时认证手段同理自选）。
+3. 拿微信 target：给 agent 发「用 message 工具给微信发一条测试消息，告诉我完整 target」。target 形状 `xxxx@im.wechat`，**裸 ID、无 `user:` 前缀**（加前缀会 ret=-3）。
+4. 填三个 Secret：
 
-1. 网关 `openclaw.json` 开启：
-   ```json
-   "gateway": { "http": { "endpoints": { "chatCompletions": { "enabled": true } } } }
-   ```
-2. 反代给 `/v1/` 路径配 basic auth（认证由反代层实现；用其他暴露方式时，认证手段同理自选）
-3. 给 agent 发消息拿微信 target：
-   > "用 message 工具给微信发一条测试消息，告诉我你用的完整 target"
-   > （形状 `xxxx@im.wechat`，**裸 ID，无 user: 前缀**——加前缀会 ret=-3）
-4. Secrets 填三个：
-   ```bash
-   gh secret set NOTIFY_OPENCLAW_URL      --body "https://你的域名或IP:端口/v1/chat/completions"
-   gh secret set NOTIFY_OPENCLAW_USER     --body "bot用户名"
-   gh secret set NOTIFY_OPENCLAW_PASSWORD --body "bot密码"
-   ```
-5. 验证：本地设好三个环境变量（或写好 config.toml 的 [notify.openclaw] 段）后跑
-   `./target/release/free-renew --test-notify`；
-   也可以直接在 Actions 手动 Run 一轮，看微信是否收到"续期已提交"或失败告警。
-   两种途径等价：Secrets（=Actions 环境变量）与 config.toml 均可驱动 OpenClaw 后端。
+```bash
+gh secret set NOTIFY_OPENCLAW_URL      --body "https://你的域名或IP:端口/v1/chat/completions"
+gh secret set NOTIFY_OPENCLAW_USER     --body "bot用户名"
+gh secret set NOTIFY_OPENCLAW_PASSWORD --body "bot密码"
+```
 
-## Cookie 过期维护（唯一周期性人工任务）
+5. 验证：本地设好这三个环境变量（或写好 config.toml 的 `[notify.openclaw]`）后跑 `./target/release/free-renew --test-notify`，或直接 Actions 手动 Run 看是否收到微信。两种途径等价（Secrets 即 Actions 环境变量，与 config.toml 二选一即可）。
 
-**症状**：收到"CSDN 发文失败"通知（如已配置通知渠道），JSONL 日志里是 401/登录跳转。
+---
 
-**处置（30 秒）**：再跑一遍 `.\scripts\refresh-csdn-cookie.ps1`。专用 profile 里登录态通常还活着，脚本直接重新导出 → 按 y 直传 Secret → 完事。如果 profile 也过期了才需要重新扫码。
+## 日常运维
 
-**知乎用户**：`ZHIHU_COOKIES` 里的 `z_c0` 失效（收"登录已过期/401"类通知）时，重跑一遍 `.\scripts\refresh-zhihu-cookie.ps1`（专用 profile 里若登录态还在，直接重新导出；不在则再扫码），按 y 直传 Secret 即可。若通知是 403/风控/验证码字样，先别再重触发，按上文"风控"说明人工处理。
+### Cookie 过期（唯一周期性人工任务）
 
-**预防**：CSDN Cookie 实测寿命数月。可以在日历上设个 2 个月提醒，或者干脆等通知来了再处理——失败当天就会尝试告警（需已配置通知渠道），不会静默丢失。
+发文 Cookie 会过期（实测寿命数周到数月）。过期表现：收到"发文失败/401"类通知，或 Actions 红叉。
 
-## 日常运维速查
+- **CSDN**：重跑 `.\scripts\refresh-csdn-cookie.ps1`（专用 profile 通常还在登录态，直接重导出，按 y 传 Secret）。
+- **知乎**：重跑 `.\scripts\refresh-zhihu-cookie.ps1`。若通知是 403/风控/验证码，**别急着重触发**——先人工登录知乎解除验证，再刷新 Cookie。
+
+### 速查表
 
 | 症状 | 原因 | 处置 |
 |---|---|---|
-| Actions 红叉，没收到任何通知 | 通知后端挂了/没配 | 查 run-logs artifact 里的 JSONL；修通知后重跑 |
-| 通知"发文失败" | CSDN Cookie 过期 | §Cookie 过期维护 |
-| 知乎发文通知含 401/403/验证码 | z_c0 过期 或 触发知乎风控 | Cookie 过期就重复制；风控则停手、人工登录知乎解除，见"选知乎路线" |
-| 知乎发文通知"挂话题失败" | 话题名匹配不到 | 改 `ZHIHU_TOPICS` 为常见话题（如"服务器"）；此项不致命，仍会尝试发布 |
-| 通知"续期提交被拒" | 厂商审核拒绝（可能内容撞车/账号风控） | 看 JSONL 里 `raw` 字段的厂商原话；改 [ai].angles 换角度池 |
-| 通知"提交异常 ret=-3"之类 | 通知指令问题 | 重跑 --test-notify；核对 target 规则 |
-| 连续多天红叉 | 可能厂商改协议 | 提 issue / 对照 docs/protocol/ 手动复查端点 |
-| 两台都到期但都成功 | 正常 | 每家 5 天窗口，run 里显示下次到期时间 |
+| Actions 红叉但没收到通知 | 通知未配置/挂了 | 查 run-logs artifact 的 JSONL；补通知后重跑 |
+| 通知"发文失败 / 缺 _xsrf / 401" | 发文 Cookie 过期或没设对 | 重跑对应平台刷新脚本 |
+| 知乎通知 403 / 验证码 | 触发知乎风控 | 停手，人工登录知乎解除，勿自动重试 |
+| 知乎通知"挂话题失败/无安全匹配" | 话题名匹配不到或全带品牌名 | 换 `ZHIHU_TOPICS`（如"服务器"）；非致命，仍尝试发布 |
+| 通知"续期提交被拒" | 厂商人工审核未过 | 看 JSONL `raw` 厂商原话；多为内容问题，可换角度池 |
+| 通知"提交异常/登录超时" | 厂商 API 或跨洋线路抖动 | 通常下轮自动重来；连续多日再看 `*_LOGIN_URL` 走自建中继 |
+| 连续多天红叉 | 可能厂商改了协议 | 对照 docs/protocol/ 手动复查端点，提 issue |
 
-## 安全清单（公开仓库部署者必读）
+### 想换发文平台
 
-1. **永远保持 Fork 出来的仓库为 Private**——Secrets 虽然加密，但 Actions 日志可能包含厂商返回的账号信息
-2. 云账号密码建议专用，不要和你其他账号复用
-3. CSDN 账号同理；被风控了损失的是小号
-4. 定期轮换密码（本仓库作者自己也是这么规划的）
-5. LLM key 建议设余额上限
+改一个 Variable 即可，其余不动：`gh variable set PLATFORM_PROVIDER --body "zhihu"`（或 `csdn`），并确保对应平台的 Cookie Secret 已就绪。
 
+---
+
+## 安全清单
+
+1. Fork 出的仓库**永远保持 Private**。
+2. 云账号、发文平台账号建议专用小号，别和主账号复用。
+3. LLM key 设余额上限。
+4. 定期轮换密码与 Cookie。
+5. **重要数据务必异地备份**——免费服务器随时可能因续期失败或政策变化丢失。

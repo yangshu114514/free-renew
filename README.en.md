@@ -15,16 +15,24 @@ Requires [Git](https://git-scm.com/) + [GitHub CLI](https://cli.github.com/) (`g
 irm https://raw.githubusercontent.com/yangshu114514/free-renew/main/install.ps1 | iex
 ```
 
-The wizard asks 6 questions: cloud account passwords → LLM API (optional test) → CSDN QR login → notification method → daily schedule (default 09:30 CST) → confirm. About 5 minutes total.
+The wizard asks 6 questions: cloud account passwords → LLM API (optional test) → **choose publish platform (CSDN/Zhihu) and capture its cookie** → notification method → daily schedule (default 09:30 CST) → confirm. About 5 minutes total.
 
 Linux/macOS or manual route: clone the repo and follow [docs/SETUP.md](docs/SETUP.md).
 
+## Publish platform: CSDN or Zhihu
+
+Renewal articles must go to a third-party content platform for the vendor's human review. Pick one at install; switchable later:
+
+- **CSDN** (default): needs a CSDN account with blog enabled; cookie captured automatically by `scripts/refresh-csdn-cookie.ps1`. Simplest.
+- **Zhihu**: needs an account that can post normally; cookie captured via CDP by `scripts/refresh-zhihu-cookie.ps1` (the `z_c0` auth cookie is httpOnly). ⚠️ Auto-posting to Zhihu from a datacenter IP risks triggering their risk control; the code stops-and-does-not-retry on captcha/403, but the IP-profile risk can't be removed by code. If the account matters, use CSDN.
+
 ## Daily use: one command
 
-When the CSDN cookie expires (every few months; you'll receive a notification if a notify backend is configured):
+When the publish cookie expires (weeks to months; you'll be notified if a notify backend is configured), re-run the matching script:
 
 ```powershell
-.\scripts\refresh-csdn-cookie.ps1
+.\scripts\refresh-csdn-cookie.ps1     # if using CSDN
+.\scripts\refresh-zhihu-cookie.ps1    # if using Zhihu
 ```
 
 The dedicated browser profile usually keeps you logged in — the script re-exports the cookie automatically and optionally pushes it to GitHub Secrets. 30 seconds.
@@ -34,10 +42,10 @@ The dedicated browser profile usually keeps you logged in — the script re-expo
 | Doc | Contents |
 |---|---|
 | [docs/SETUP.md](docs/SETUP.md) | full install guide, secrets reference, notification wiring, ops troubleshooting table |
-| [docs/protocol/](docs/protocol/) | technical details: Sanfengyun/Abeiyun `cmd=` protocol, CSDN signing algorithm, verified samples |
+| [docs/protocol/](docs/protocol/) | technical details: Sanfengyun/Abeiyun `cmd=` protocol, CSDN signing, Zhihu publish API (verified samples) |
 | [NOTICE](NOTICE) | third-party attribution |
 
-Architecture in one sentence: **GitHub Actions runs this repo's Rust binary daily** — vendor API login + status check (4-second exit when not due); when due, an LLM writes a random-angle experience article (machine-validated word lists), publishes it to CSDN, screenshots the page, and submits to the vendor's review queue. Scheduled workflows get disabled by GitHub after 60 days of repo inactivity — [keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow) is built in to prevent that.
+Architecture in one sentence: **GitHub Actions runs this repo's Rust binary daily** — vendor API login + status check (exits in seconds when not due); when due, an LLM writes a unique-angle experience article (machine-validated against banned words / required keywords / AI-tone heuristics), publishes it to the chosen content platform (CSDN or Zhihu), screenshots the page, and submits to the vendor's review queue. Scheduled workflows get disabled by GitHub after 60 days of repo inactivity — [keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow) is built in to prevent that.
 
 ## Acknowledgments
 
@@ -58,7 +66,7 @@ Other direct credits (full list in NOTICE):
 
 **Disclaimer (full text)**:
 
-1. This project is for learning and personal technical research only. Users are responsible for complying with the Terms of Service of Abeiyun, Sanfengyun, CSDN, and all third-party platforms involved.
+1. This project is for learning and personal technical research only. Users are responsible for complying with the Terms of Service of Abeiyun, Sanfengyun, CSDN, Zhihu, and all third-party platforms involved.
 2. Automating the vendors' promotion-style renewal terms may not be endorsed by them. **Any consequence of using this project (account suspension, server reclamation, data loss) is borne by the user.**
 3. Article content is LLM-generated. Ensure compliance with platform content policies and truthfully declare AI-assisted generation (enabled by default). Do not mass-produce spam or abuse.
 4. No user credentials are stored, uploaded, or collected by this project; all configuration lives in your local files or private repo Secrets.
