@@ -14,7 +14,7 @@
   .\refresh-csdn-cookie.ps1 -SelfTest   # 仅体检：编译 CDP 客户端 + 查依赖/路径，不启动浏览器、不动登录态
 #>
 [CmdletBinding()]
-param([switch]$SelfTest)
+param([switch]$SelfTest, [switch]$NoSecretPush)
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -156,10 +156,12 @@ try {
         if ($u -match "github\.com[:/](.+?)(\.git)?/?$") { $repoSlug = $Matches[1]; $inRepo = $true }
     }
 } catch {}
-if ($hasGh -and $inRepo) {
+if ($NoSecretPush) {
+    Write-Host "(调用方要求不直传 Secret：Cookie 已存 $OutFile，交由上层统一写入)"
+} elseif ($hasGh -and $inRepo) {
     $ans = Read-Host "检测到 gh CLI + git 仓库，直接更新 Secret CSDN_COOKIES? (y/n)"
     if ($ans -eq "y") {
-        gh secret set CSDN_COOKIES --body $singleLine --repo $repoSlug
+        $singleLine | gh secret set CSDN_COOKIES --repo $repoSlug   # 走 stdin，免疫 PS5.1 参数引用坑
         if ($LASTEXITCODE -eq 0) { Write-Host "OK: Secret CSDN_COOKIES 已更新，下轮运行即生效" }
     }
 } else {

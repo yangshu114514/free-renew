@@ -126,16 +126,18 @@ if ($inRepo -and $repo -and $repo -ne $UPSTREAM) {
 }
 $repoArg = @("--repo", $repo)
 
-# 注意：gh secret/variable set 的 --body 必须直接给值；`--body -` 会把值存成字面量 "-"
-# （gh 只在完全不给 --body 时才从 stdin 读）。曾因此把所有 Secret 写成 "-"。
+# 传值一律走 stdin 管道（**不给 --body**）：彻底免疫 Windows PowerShell 5.1 对
+# native 命令参数的引用改写（值含空格/引号/%/| 都不怕）。坑点：`--body -` 会把值存成
+# 字面量 "-"（gh 只在完全不给 --body 时才读 stdin）。stdin 尾随换行无害：Rust config.rs
+# 对每个 env 值都 .trim()。
 function Set-GhSecret($name, $value) {
     if ($DryRun) { Guard "写 Secret $name" { }; return }
-    gh secret set $name --body $value @repoArg
+    $value | gh secret set $name @repoArg
     if ($LASTEXITCODE -eq 0) { Ok "Secret $name 已写入" } else { Die "Secret $name 写入失败" }
 }
 function Set-GhVar($name, $value) {
     if ($DryRun) { Guard "写 Variable $name = $value" { }; return }
-    gh variable set $name --body $value @repoArg
+    $value | gh variable set $name @repoArg
     if ($LASTEXITCODE -eq 0) { Ok "Variable $name = $value" } else { Die "Variable $name 写入失败" }
 }
 
@@ -194,7 +196,7 @@ function Get-PlatformCookie($label, $refreshRel, $cookieFile) {
     $refresh = Join-Path (Get-Location) $refreshRel
     if (-not (Test-Path $refresh)) { Die "找不到 $refreshRel（请在完整仓库目录内运行本向导）" }
     Write-Host "即将弹出专用浏览器：请在其中登录 $label（登录态保留在独立 profile，供日后刷新）"
-    & $refresh
+    & $refresh -NoSecretPush   # 让本向导成为 Cookie Secret 的唯一写入者，避免重复设+重复问
     if (-not (Test-Path $cookieFile)) { Die "Cookie 文件未产出，请重跑本向导或手动执行 $refreshRel" }
     $age = ((Get-Date) - (Get-Item $cookieFile).LastWriteTime).TotalMinutes
     if ($age -gt 2) { Die "Cookie 文件是 $([math]::Round($age)) 分钟前的残留，疑似本次刷新失败，请重跑" }
