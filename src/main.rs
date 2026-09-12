@@ -181,7 +181,7 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
     }
 
     let debug_dir = logging::debug_dir();
-    let pic = match screenshot::capture(&url, &article.title, &debug_dir, login_cookie(cfg)) {
+    let pic = match screenshot::capture(&url, &article.title, &debug_dir, login_cookie(cfg), profile_key) {
         Ok(p) => {
             let meta = std::fs::metadata(&p).ok();
             run.event(step("screenshot").as_str(), "ok", json!({
@@ -203,8 +203,9 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
     // 5. 提交
     run.event(step("submit").as_str(), "ok", json!({"vendor": vendor, "url": url}));
     // 截图留档进 debug 目录（提交原件照旧使用后删除）：
-    // 厂商审核若拒，run 的 debug-dump artifact 里必须有原图可对照排查
-    let archive = debug_dir.join("postpone_submitted.png");
+    // 厂商审核若拒，run 的 debug-dump artifact 里必须有原图可对照排查。
+    // 文件名带厂商 key：两家同轮提交时留档不互相覆盖。
+    let archive = debug_dir.join(format!("postpone_submitted-{profile_key}.png"));
     let _ = std::fs::copy(&pic, &archive);
     let result = client.submit_renewal(&url, &pic);
     let _ = std::fs::remove_file(&pic);
@@ -256,6 +257,10 @@ fn publish_article(cfg: &AppConfig, vendor: &str, article: &writer::Article) -> 
             let Some(csdn_cfg) = &cfg.csdn else {
                 anyhow::bail!("发文平台为 csdn 但未配置 Cookie（config.toml [platform.csdn] 或 CSDN_COOKIES 环境变量）");
             };
+            // 空 Cookie 要在这里拦：否则一路走到 HTTP 4xx 才炸，报错毫无指向性
+            if csdn_cfg.cookie.trim().is_empty() {
+                anyhow::bail!("发文平台为 csdn 但 Cookie 为空——运行采集脚本或重跑 install.ps1 写入 CSDN_COOKIES");
+            }
             let client = csdn::CsdnClient::new(&csdn_cfg.cookie, &csdn_cfg.app_secret, &csdn_cfg.x_ca_key);
             let tags: Vec<String> = csdn_cfg.tags.clone();
             client.publish_sync(
@@ -271,6 +276,10 @@ fn publish_article(cfg: &AppConfig, vendor: &str, article: &writer::Article) -> 
             let Some(zh) = &cfg.zhihu else {
                 anyhow::bail!("发文平台为 zhihu 但未配置 Cookie（config.toml [platform.zhihu] 或 ZHIHU_COOKIES 环境变量）");
             };
+            // 同上：配置段落存在≠Cookie 有值，空值提前拦、报可执行结论
+            if zh.cookie.trim().is_empty() {
+                anyhow::bail!("发文平台为 zhihu 但 Cookie 为空——运行 scripts/refresh-zhihu-cookie.ps1 或重跑 install.ps1 写入 ZHIHU_COOKIES");
+            }
             let client = zhihu::ZhihuClient::new(zh)?;
             client.publish(
                 &article.title,
