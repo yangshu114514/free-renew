@@ -6,8 +6,8 @@
 .DESCRIPTION
   知乎登录态命脉 z_c0 是 httpOnly，F12 / document.cookie 拿不到，必须经 CDP 读取。
   v1 用了已在新版 Chrome 废弃的 Network.getAllCookies 且不检查错误，导致“登录后一直等不到
-  z_c0”的假死。v2 改用 Storage.getCookies(flatten)，按 id 精确匹配 CDP 响应，并把每轮
-  抓到的 cookie 名单打出来，便于诊断。
+  z_c0”的假死。v2 改用 Storage.getCookies(flatten)，按 id 精确匹配 CDP 响应，每次调用带
+  15s 超时（命令无人应答时直接报错，不再无声卡死），并把每轮抓到的 cookie 名单打出来便于诊断。
 
   流程：启动带远程调试端口的专用 Chrome → 你登录 → 检测到 z_c0 → 导航写文页补齐
   _xsrf/d_c0/q_c1 → 导出单行 → 可选直传 gh Secret ZHIHU_COOKIES。
@@ -49,7 +49,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 public static class __TYPE__ {
-    public static async Task<string> CallAsync(ClientWebSocket ws, int id, string method, string paramsJson) {
+    public static async Task<string> CallAsync(ClientWebSocket ws, int id, string method, string paramsJson, int timeoutMs) {
         var req = "{\"id\":" + id + ",\"method\":\"" + method + "\"";
         if (paramsJson != null) req += ",\"params\":" + paramsJson;
         req += "}";
@@ -63,7 +63,14 @@ public static class __TYPE__ {
             if (++guard > 500) throw new Exception("等待响应超时(事件过多)");
             var ms = new System.IO.MemoryStream();
             while (true) {
-                var r = await ws.ReceiveAsync(new ArraySegment<byte>(buf), CancellationToken.None);
+                // 读必须有超时：Chrome 对**已移除**的 CDP 命令不回任何响应，
+                // 裸 ReceiveAsync 会永远阻塞，脚本表现成"卡死"且打不出任何错误。
+                var recv = ws.ReceiveAsync(new ArraySegment<byte>(buf), CancellationToken.None);
+                if (await Task.WhenAny(recv, Task.Delay(timeoutMs)) != recv) {
+                    try { ws.Abort(); } catch { }
+                    throw new Exception("等待 CDP 响应超时(" + timeoutMs + "ms)，方法: " + method);
+                }
+                var r = recv.Result;
                 if (r.MessageType == WebSocketMessageType.Close) throw new Exception("连接被关闭");
                 ms.Write(buf, 0, r.Count);
                 if (r.EndOfMessage) break;
@@ -78,11 +85,14 @@ public static class __TYPE__ {
 $wsClientCode = $wsClientCode -replace "__TYPE__", $TypeName
 Add-Type -TypeDefinition $wsClientCode -Language CSharp
 
+# CDP 单次调用超时：正常命令是毫秒级，15s 足以区分"慢"与"这个命令根本没人应答"
+$CdpTimeoutMs = 15000
+
 function Invoke-Cdp {
     param($Ws, [ref]$CidRef, [string]$Method, [string]$ParamsJson = $null)
     $CidRef.Value++
     $cdpType = $TypeName -as [type]
-    $raw = $cdpType::CallAsync($Ws, $CidRef.Value, $Method, $ParamsJson).GetAwaiter().GetResult()
+    $raw = $cdpType::CallAsync($Ws, $CidRef.Value, $Method, $ParamsJson, $CdpTimeoutMs).GetAwaiter().GetResult()
     $obj = $raw | ConvertFrom-Json
     if ($obj.error) { throw "CDP ${Method} 返回错误: $($obj.error.code) $($obj.error.message)" }
     return $obj
@@ -133,13 +143,11 @@ $ws = Get-PageWs
 if (-not $ws) { Write-Host "ERR: 未找到可调试页面（Chrome 是否被关了？）"; exit 1 }
 
 function Get-ZhihuCookies($conn, [ref]$cidRef) {
-    # 首选 Storage.getCookies(官方、含 httpOnly、返回全上下文)；失败回退 Network.getAllCookies
-    $r = $null
-    try {
-        $r = Invoke-Cdp -Ws $conn -CidRef $cidRef -Method "Storage.getCookies" -ParamsJson '{"flatten":true}'
-    } catch {
-        $r = Invoke-Cdp -Ws $conn -CidRef $cidRef -Method "Network.getAllCookies"
-    }
+    # 用 Storage.getCookies：当前稳定接口，含 httpOnly（z_c0 正是 httpOnly），
+    # 返回全部上下文。**不做 Network.getAllCookies 回退**——该方法已被 Chrome 129
+    # 移除，实测调用后浏览器连响应都不返回（白等一次超时），回退救不了任何浏览器，
+    # 只会把 Storage.getCookies 的真实错误信息盖掉。
+    $r = Invoke-Cdp -Ws $conn -CidRef $cidRef -Method "Storage.getCookies" -ParamsJson '{"flatten":true}'
     return @($r.result.cookies | Where-Object { $_.domain -match "zhihu\.com" })
 }
 
