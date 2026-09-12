@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   知乎 Cookie 采集器：free-renew 走知乎发文路线时的一次性登录 + 取 Cookie。
