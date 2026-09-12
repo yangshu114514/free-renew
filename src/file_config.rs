@@ -186,7 +186,9 @@ fn default_notify_tag() -> String {
     "renewal".into()
 }
 fn default_article_wait() -> u64 {
-    300
+    // 裸 HTTP 就绪检查必被 CSDN WAF 521，300s 纯属空等；真正门禁在 Chrome 截图。
+    // 压到 60s：给刚发的文章一点索引时间即可，省下的预算留给网络重试
+    60
 }
 fn default_http_timeout() -> u64 {
     30
