@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   CSDN Cookie 刷新（free-renew 日常维护；登录态存活时约 30 秒，需重新扫码则更久）
@@ -142,7 +142,7 @@ try {
 if ($hasGh -and $inRepo) {
     $ans = Read-Host "检测到 gh CLI + git 仓库，直接更新 Secret CSDN_COOKIES? (y/n)"
     if ($ans -eq "y") {
-        $singleLine | gh secret set CSDN_COOKIES --body - --repo $repoSlug
+        gh secret set CSDN_COOKIES --body $singleLine --repo $repoSlug
         if ($LASTEXITCODE -eq 0) { Write-Host "OK: Secret CSDN_COOKIES 已更新，下轮运行即生效" }
     }
 } else {

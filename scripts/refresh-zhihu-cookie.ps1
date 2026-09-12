@@ -193,7 +193,7 @@ try {
 if ($hasGh -and $repoSlug) {
     $ans = Read-Host "   检测到 gh CLI + 仓库 $repoSlug，直接更新 Secret ZHIHU_COOKIES? (y/n)"
     if ($ans -eq "y") {
-        $singleLine | gh secret set ZHIHU_COOKIES --body - --repo $repoSlug
+        gh secret set ZHIHU_COOKIES --body $singleLine --repo $repoSlug
         if ($LASTEXITCODE -eq 0) { Write-Host "   ✅ Secret ZHIHU_COOKIES 已更新，下次 Actions 运行即生效" }
         else { Write-Host "   gh secret set 失败，请手动复制 $OutFile 内容去 Settings→Secrets 添加" }
     }
