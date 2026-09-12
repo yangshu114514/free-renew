@@ -90,7 +90,9 @@ impl ZhihuClient {
     }
 
     /// 发布知乎专栏文章，返回公开 URL。`html` 为正文 HTML。
-    pub fn publish(&self, title: &str, html: &str, topics: &[String], toc: bool) -> Result<String> {
+    /// `publish_final=false` 时只建草稿+写正文+挂话题，停在发布前，返回草稿编辑链接
+    /// （用于低风控代价的连通性探路：验证鉴权与接口形状，不真公开贴文）。
+    pub fn publish(&self, title: &str, html: &str, topics: &[String], toc: bool, publish_final: bool) -> Result<String> {
         // 1. 建草稿
         let resp = self
             .req(reqwest::Method::POST, &format!("{ZHUANLAN}/api/articles/drafts"))
@@ -137,6 +139,13 @@ impl ZhihuClient {
                 // 话题失败不致命：部分情况下仍可发；记录后继续尝试发布
                 Err(e) => tracing::warn!("知乎挂话题失败（继续尝试发布）: {e}"),
             }
+        }
+
+        // 3.5 探路模式：停在发布前，返回草稿编辑链接
+        if !publish_final {
+            let edit = format!("{ZHUANLAN}/p/{id}/edit");
+            tracing::info!("知乎草稿探路完成（未发布）: {edit}");
+            return Ok(edit);
         }
 
         // 4. 发布

@@ -13,6 +13,10 @@ on:
         description: "可选：截图验证的文章标题关键词（留空则只防挑战页，不校验标题）"
         required: false
         default: ""
+      test_zhihu:
+        description: "可选：填厂商名(三丰云/阿贝云)只探知乎发文链路(建草稿不发布)；留空走正常续期"
+        required: false
+        default: ""
 
 # 防止 GitHub 60 天无 activity 自动停用 scheduled workflow：
 # keepalive-workflow 自动判断最后 commit 是否接近停用阈值，未到则 skip，
@@ -95,7 +99,10 @@ jobs:
 
       - name: Run renewal
         run: |
-          if [ -n "$TEST_SCREENSHOT_URL" ]; then
+          if [ -n "$TEST_ZHIHU" ]; then
+            echo "[test mode] 知乎发文链路探路（建草稿不发布）: vendor=$TEST_ZHIHU"
+            ./target/release/free-renew --test-zhihu "$TEST_ZHIHU"
+          elif [ -n "$TEST_SCREENSHOT_URL" ]; then
             echo "[test mode] 只验证截图链路: $TEST_SCREENSHOT_URL"
             ./target/release/free-renew --test-screenshot "$TEST_SCREENSHOT_URL" "$TEST_SCREENSHOT_TITLE"
           else
@@ -104,6 +111,7 @@ jobs:
         env:
           TEST_SCREENSHOT_URL: ${{ inputs.test_screenshot_url }}
           TEST_SCREENSHOT_TITLE: ${{ inputs.test_screenshot_title }}
+          TEST_ZHIHU: ${{ inputs.test_zhihu }}
 
       - name: Upload run logs
         if: always()
