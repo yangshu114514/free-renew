@@ -62,6 +62,37 @@ gh secret set CSDN_COOKIES --body "UserName=xxx; UserToken=xxx; ..."
 
 Linux/macOS：`cargo run --release --bin csdn_cookie_export`（功能相同）。
 
+### 选知乎发文路线（可选，替代 CSDN）
+
+如果你 CSDN 号权重低、AI 文老被机审删除，可改用**知乎**（需一个发帖正常、有
+权重的号）。三丰云/阿贝云认知乎文章 URL 作为续期凭证。
+
+**1）切换平台**：仓库 Settings → Secrets and variables → **Variables** → New：
+
+- 名字 `PLATFORM_PROVIDER`，值 `zhihu`
+- （可选）名字 `ZHIHU_TOPICS`，值如 `云服务器 Linux`（空格分隔；不设则用默认）
+
+**2）导出知乎 Cookie**（知乎没有采集脚本，手动复制，2 分钟）：
+
+1. 电脑浏览器登录 <https://www.zhihu.com>
+2. F12 → **Application（应用）** → Cookies → 选 `https://www.zhihu.com`
+3. 把 `z_c0`、`_xsrf`、`d_c0`、`q_c1` 这几条复制拼成一行 `k=v; k=v; ...`
+   （`z_c0` 是登录态命脉、`_xsrf` 发文必需，缺了会直接报错）
+4. 存成 Secret：
+
+```bash
+gh secret set ZHIHU_COOKIES --body "z_c0=...; _xsrf=...; d_c0=...; q_c1=..."
+```
+
+**3）验证**：Actions 手动 Run 一轮，看是否走完"建草稿→挂话题→发布→截图→提交"。
+
+> ⚠️ **账号风控风险（务必知情）**：本工具默认在 GitHub Actions 的微软数据中心
+> IP 上、用你的知乎登录态自动发帖。这与"你本人平时登录的家用 IP"画像差异很大，
+> 知乎风控可能弹出验证、限制发帖，严重时影响账号。**这是拿你的号在冒险**。
+> 代码层面已做保护：一旦命中 401/403/验证码就**立刻停止且不重试**（反复撞风控
+> 才会真把号搞封），并通过通知告知你。但"自动 + 机房 IP"这个根本画像的风险
+> 无法由代码消除。若你的号很重要，优先考虑半自动（生成好草稿、你手动点发布）。
+
 ### 第 5 步：通知（可选但强烈建议）
 
 没有通知 = 出了事你不知道。两种接法：
@@ -107,6 +138,8 @@ Linux/macOS：`cargo run --release --bin csdn_cookie_export`（功能相同）�
 
 **处置（30 秒）**：再跑一遍 `.\scripts\refresh-csdn-cookie.ps1`。专用 profile 里登录态通常还活着，脚本直接重新导出 → 按 y 直传 Secret → 完事。如果 profile 也过期了才需要重新扫码。
 
+**知乎用户**：`ZHIHU_COOKIES` 里的 `z_c0` 失效（收"登录已过期/401"类通知）时，登录 zhihu.com → F12 重新复制完整 Cookie → `gh secret set ZHIHU_COOKIES --body "..."`。知乎 Cookie 无自动刷新脚本，只能手动。若通知是 403/风控字样，先别再重触发，按上文"风控"说明处理。
+
 **预防**：CSDN Cookie 实测寿命数月。可以在日历上设个 2 个月提醒，或者干脆等通知来了再处理——失败当天就会尝试告警（需已配置通知渠道），不会静默丢失。
 
 ## 日常运维速查
@@ -115,6 +148,8 @@ Linux/macOS：`cargo run --release --bin csdn_cookie_export`（功能相同）�
 |---|---|---|
 | Actions 红叉，没收到任何通知 | 通知后端挂了/没配 | 查 run-logs artifact 里的 JSONL；修通知后重跑 |
 | 通知"发文失败" | CSDN Cookie 过期 | §Cookie 过期维护 |
+| 知乎发文通知含 401/403/验证码 | z_c0 过期 或 触发知乎风控 | Cookie 过期就重复制；风控则停手、人工登录知乎解除，见"选知乎路线" |
+| 知乎发文通知"挂话题失败" | 话题名匹配不到 | 改 `ZHIHU_TOPICS` 为常见话题（如"服务器"）；此项不致命，仍会尝试发布 |
 | 通知"续期提交被拒" | 厂商审核拒绝（可能内容撞车/账号风控） | 看 JSONL 里 `raw` 字段的厂商原话；改 [ai].angles 换角度池 |
 | 通知"提交异常 ret=-3"之类 | 通知指令问题 | 重跑 --test-notify；核对 target 规则 |
 | 连续多天红叉 | 可能厂商改协议 | 提 issue / 对照 docs/protocol/ 手动复查端点 |
