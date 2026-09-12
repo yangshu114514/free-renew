@@ -33,6 +33,10 @@ on:
         description: "submit_existing 文章标题关键词（截图校验用，可留空）"
         required: false
         default: ""
+      test_notify:
+        description: "可选：填任意值只测通知链路（不碰厂商/平台）。注意网关 401/403 会如实报错"
+        required: false
+        default: ""
 
 # 防止 GitHub 60 天无 activity 自动停用 scheduled workflow：
 # keepalive-workflow 自动判断最后 commit 是否接近停用阈值，未到则 skip，
@@ -129,6 +133,9 @@ jobs:
           elif [ -n "$TEST_SCREENSHOT_URL" ]; then
             echo "[test mode] 只验证截图链路: $TEST_SCREENSHOT_URL"
             ./target/release/free-renew --test-screenshot "$TEST_SCREENSHOT_URL" "$TEST_SCREENSHOT_TITLE"
+          elif [ -n "$TEST_NOTIFY" ]; then
+            echo "[test mode] 只测通知链路（--test-notify，失败时看 notify 相关日志分级）"
+            ./target/release/free-renew --test-notify
           else
             ./target/release/free-renew
           fi
@@ -140,6 +147,7 @@ jobs:
           SUBMIT_EXISTING: ${{ inputs.submit_existing }}
           SUBMIT_VENDOR: ${{ inputs.submit_vendor }}
           SUBMIT_TITLE: ${{ inputs.submit_title }}
+          TEST_NOTIFY: ${{ inputs.test_notify }}
 
       - name: Upload run logs
         if: always()
