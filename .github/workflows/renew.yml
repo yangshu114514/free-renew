@@ -43,26 +43,39 @@ on:
         default: ""
 
 # 防止 GitHub 60 天无 activity 自动停用 scheduled workflow：
-# keepalive-workflow 自动判断最后 commit 是否接近停用阈值，未到则 skip，
-# 到了才追加一个 no-op commit 保活
-# https://github.com/marketplace/actions/keepalive-workflow
+# 保活由下方自建 keepalive job 完成（每月 1 日按需推空提交，零第三方依赖——
+# 原用的 marketplace action 上游已被 GitHub 按 ToS 封禁，见 job 注释）。
 # 顶层权限收紧为 read；keepalive job 内部单独提权 write
 permissions:
   contents: read
 
 jobs:
   keepalive:
-    # 与续期并行；action 内部自判：未接近停用阈值时直接 skip
-    # continue-on-error：保活失败（如 API 限流）不应污染整轮结论——
-    # 红叉必须只表示“续期本身出问题”
-    if: ${{ github.event_name == 'schedule' }}
+    # GitHub 会把 60 天无任何仓库活动的 repo 的 scheduled workflow 自动禁用，
+    # 且定时运行本身不算"活动"。原先用的第三方 gautamkrishnar/keepalive-workflow
+    # 已于 2025-04 被 GitHub 按 ToS 封禁（仓库不存在了），job 在 Set up job 就报
+    # "Repository access blocked"——第三方 action 随时可能步后尘，这里自建零依赖版：
+    # 每月 1 日若距上次提交已超 30 天，push 一条空提交记录活动。
+    # renew.yml 没有 push 触发器，空提交不会造成循环运行。
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
       contents: write
     steps:
-      - uses: gautamkrishnar/keepalive-workflow@v2
+      - uses: actions/checkout@v4
+
+      - name: Monthly activity ping
+        run: |
+          if [ "$(date -u +%d)" != "01" ]; then echo "今天不是 1 号，无需 ping"; exit 0; fi
+          last=$(git log -1 --format=%ct)
+          age=$(( ( $(date +%s) - last ) / 86400 ))
+          if [ "$age" -lt 30 ]; then echo "仓库仍活跃（距上次提交 ${age} 天），跳过"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "chore: keep scheduled workflow active (monthly ping)"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
   renew:
     runs-on: ubuntu-latest
