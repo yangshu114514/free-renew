@@ -25,7 +25,7 @@ Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.m
 
 - **CSDN**（默认）：需已开通博客的 CSDN 号，Cookie 用 `scripts/refresh-csdn-cookie.ps1` 自动采集，最省心。
 - **知乎**：需发帖正常的号；Cookie 用 `scripts/refresh-zhihu-cookie.ps1` 走 CDP 抓 httpOnly 的 `z_c0`。⚠️ 知乎在 Actions 机房 IP 上自动发帖有触发风控的实质风险，代码做到"弹验证码即停不重试"，但画像风险无法消除——号很重要请选 CSDN。
-- **两家都连（推荐）**：知乎优先发文，知乎链路故障（Cookie 过期/验证码/风控拒发）时**自动改由 CSDN 发出**并通知你排查主平台。装好后 `test_platforms` 输入可让两家各发一篇草稿做链路体检（停在公开发布前，不占发文额度）。
+- **两家都连（主/备方向自选）**：任选一家优先发文，主平台链路故障（Cookie 过期/验证码/风控拒发）时**当轮自动改由另一家发出**并通知你排查主平台；只配了一家时绝不会去试另一家。装好后 `test_platforms` 输入可让两家各发一篇草稿做链路体检（停在公开发布前，不占发文额度）。
 
 ## 日常使用：只有一个命令
 

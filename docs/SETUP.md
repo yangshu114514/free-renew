@@ -97,16 +97,22 @@ Linux/macOS：`cargo run --release --bin csdn_cookie_export`，把打印的单�
 
 3. 话题（可选）：`gh variable set ZHIHU_TOPICS --body "免费云服务器 虚拟主机"`（空格分隔，不设用此默认）。知乎发文通常必须挂话题，脚本会精确匹配并自动排除带其它云品牌名的话题。
 
-#### 平台 C：两家都连（知乎优先 + CSDN 兜底）
+#### 平台 C：两家都连（主/备方向自选）
 
-把 A、B 两家的 Cookie Secret 都配齐，然后：
+把 A、B 两家的 Cookie Secret 都配齐，主备方向由你定（`install.ps1` 选 3 会问你；手动配置如下任选一种）：
 
 ```bash
+# 知乎为主、CSDN 兜底
 gh variable set PLATFORM_PROVIDER --body "zhihu"
-gh variable set PLATFORM_FALLBACK --body "csdn"     # 或删掉本变量走自动
+gh variable set PLATFORM_FALLBACK --body "csdn"
+# 或 CSDN 为主、知乎兜底
+gh variable set PLATFORM_PROVIDER --body "csdn"
+gh variable set PLATFORM_FALLBACK --body "zhihu"
+# 彻底关闭兜底（只认主平台）
+gh variable set PLATFORM_FALLBACK --body "none"
 ```
 
-知乎链路哪天出问题（Cookie 过期、弹验证码、风控拒发），当轮续期自动改由 CSDN 发文提交，同时你会收到"已切换兜底"通知——**兜底是保命的，不是免责的**，收到切换通知后要尽快修主平台。截图注入的登录 Cookie 按文章实际所在域选择，切换后不会把知乎 Cookie 带到 CSDN 页面。装好后用 `test_platforms` 输入触发一次"双平台草稿体检"（见第 5 步），确认两条链路都通。
+只配了一家的 Cookie 时**绝不会去试另一家**：`install.ps1` 选单平台会显式写 `PLATFORM_FALLBACK=none`；手动不设该变量时走"自动"语义——只有另一家的 Cookie 也真实存在才会互备。主平台发文失败时自动换兜底平台重发一次（两家都失败才报错），并推通知"已切换"提醒排查主平台。**兜底是保命的，不是免责的**，收到切换通知后要尽快修主平台。截图注入的登录 Cookie 按文章实际所在域选择，切换后不会把知乎 Cookie 带到 CSDN 页面（反之同理）。装好后用 `test_platforms` 输入触发一次"双平台草稿体检"（见第 5 步），确认两条链路都通。
 
 ### 4. 通知（可选，强烈建议）
 

@@ -195,7 +195,7 @@ Write-Host @"
   2 = 知乎   （需发帖正常、有重量的知乎号）
         提醒：知乎在 GitHub Actions 机房 IP 上自动发帖有触发风控/影响账号的实质风险，
         代码已加内容安全红线并'弹验证码即停不重试'，但机房 IP 的画像风险无法消除。
-  3 = 两家都连（推荐：知乎优先发文，知乎链路出问题自动切 CSDN 并通知你排查）
+  3 = 两家都连（主/备自选：CSDN 主或知乎主，主平台链路出问题当轮自动切另一家并发通知）
 "@ -ForegroundColor Gray
 $platform = Ask "选择发文平台 (1/2/3，默认 1)" "1"
 if ($platform -eq "") { $platform = "1" }
@@ -233,17 +233,32 @@ if ($platform -eq "2") {
     $chosenRefresh  = "scripts/refresh-zhihu-cookie.ps1"
     Ok "发文平台 = 知乎（Cookie 已入 Secret ZHIHU_COOKIES）"
 } elseif ($platform -eq "3") {
-    Set-GhVar "PLATFORM_PROVIDER" "zhihu"
-    Set-GhVar "PLATFORM_FALLBACK" "csdn"
-    $ck = Get-PlatformCookie "知乎" "scripts\refresh-zhihu-cookie.ps1" (Join-Path $env:TEMP "zhihu_cookies_oneline.txt")
-    Set-GhSecret "ZHIHU_COOKIES" $ck
+    # 双平台：主备方向由用户自选。谁都可能哪天挂掉（Cookie 过期/风控/验证码），
+    # 主平台挂了自动切另一家发出并通知——但"自动切"≠"不用修"。
+    $prim = Ask "主发文平台选哪家? (1=CSDN 主、知乎备 / 2=知乎 主、CSDN 备，默认 2)" "2"
+    if ($prim -eq "") { $prim = "2" }
+    if ($prim -eq "1") {
+        Set-GhVar "PLATFORM_PROVIDER" "csdn"
+        Set-GhVar "PLATFORM_FALLBACK" "zhihu"
+        $ckc = Get-PlatformCookie "CSDN" "scripts\refresh-csdn-cookie.ps1" (Join-Path $env:TEMP "csdn_cookies_oneline.txt")
+        Set-GhSecret "CSDN_COOKIES" $ckc
+        $ck = Get-PlatformCookie "知乎" "scripts\refresh-zhihu-cookie.ps1" (Join-Path $env:TEMP "zhihu_cookies_oneline.txt")
+        Set-GhSecret "ZHIHU_COOKIES" $ck
+        $chosenPlatform = "CSDN 为主 + 知乎兜底"
+        Ok "发文平台 = CSDN 优先，链路故障自动切知乎（两家 Cookie 均已入 Secrets）"
+    } else {
+        Set-GhVar "PLATFORM_PROVIDER" "zhihu"
+        Set-GhVar "PLATFORM_FALLBACK" "csdn"
+        $ck = Get-PlatformCookie "知乎" "scripts\refresh-zhihu-cookie.ps1" (Join-Path $env:TEMP "zhihu_cookies_oneline.txt")
+        Set-GhSecret "ZHIHU_COOKIES" $ck
+        $ckc = Get-PlatformCookie "CSDN" "scripts\refresh-csdn-cookie.ps1" (Join-Path $env:TEMP "csdn_cookies_oneline.txt")
+        Set-GhSecret "CSDN_COOKIES" $ckc
+        $chosenPlatform = "知乎为主 + CSDN 兜底"
+        Ok "发文平台 = 知乎优先，链路故障自动切 CSDN（两家 Cookie 均已入 Secrets）"
+    }
     $topics = Ask "知乎发文话题（空格分隔，回车用默认 '免费云服务器 虚拟主机'）"
     if ("$topics".Trim() -ne "") { Set-GhVar "ZHIHU_TOPICS" "$topics".Trim() }
-    $ckc = Get-PlatformCookie "CSDN" "scripts\refresh-csdn-cookie.ps1" (Join-Path $env:TEMP "csdn_cookies_oneline.txt")
-    Set-GhSecret "CSDN_COOKIES" $ckc
-    $chosenPlatform = "知乎为主 + CSDN 兜底"
-    $chosenRefresh  = "知乎: scripts/refresh-zhihu-cookie.ps1  CSDN: scripts/refresh-csdn-cookie.ps1"
-    Ok "发文平台 = 知乎优先，链路故障自动切 CSDN（两家 Cookie 均已入 Secrets）"
+    $chosenRefresh = "知乎: scripts/refresh-zhihu-cookie.ps1  CSDN: scripts/refresh-csdn-cookie.ps1"
 } else {
     Set-GhVar "PLATFORM_PROVIDER" "csdn"
     Set-GhVar "PLATFORM_FALLBACK" "none"
