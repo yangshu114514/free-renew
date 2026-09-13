@@ -200,13 +200,39 @@ fn validate(text: &str, vendor: &str, required: &[String], forbidden: &[String])
     if !text.contains(vendor) {
         problems.push(format!("缺少厂商名 {vendor}"));
     }
+    // 串厂商一票级错误：给三丰云的文章里出现"阿贝云"（few-shot 范文正是阿贝云，
+    // 模型最容易借这词），厂商审核会看成别家申请。
+    let other = match vendor {
+        "三丰云" => Some("阿贝云"),
+        "阿贝云" => Some("三丰云"),
+        _ => None,
+    };
+    if let Some(o) = other {
+        if text.contains(o) {
+            problems.push(format!("出现另一厂商名「{o}」——本次是 {vendor} 的续期文，串厂商必被拒"));
+        }
+    }
     for kw in required {
         if !kw.is_empty() && !text.contains(kw.as_str()) {
             problems.push(format!("缺少关键词 {kw}"));
         }
     }
-    if !text.contains("abeiyun.com") && !text.contains("sanfengyun.com") {
-        problems.push("缺少官网链接".into());
+    // 官网链接必须与本次续期厂商一致：给阿贝云的文章带三丰云链接，厂商人工审核
+    // 会判"文章与申请不符"直接拒（早先"任一域名即过"曾放过跨厂商串文）。
+    let want_domain = match vendor {
+        "三丰云" => Some("sanfengyun.com"),
+        "阿贝云" => Some("abeiyun.com"),
+        _ => None,
+    };
+    let missing_link = match want_domain {
+        Some(d) => !text.contains(d),
+        None => !text.contains("abeiyun.com") && !text.contains("sanfengyun.com"),
+    };
+    if missing_link {
+        problems.push(match want_domain {
+            Some(d) => format!("缺少/错挂官网链接（本次厂商要求含 {d}）"),
+            None => "缺少官网链接".into(),
+        });
     }
     for word in forbidden {
         if !word.is_empty() && text.contains(word.as_str()) {
@@ -378,6 +404,20 @@ mod tests {
             .filter(|p| p.contains("雷区") || p.contains("绝对化") || p.contains("竞品"))
             .collect::<Vec<_>>();
         assert!(red.is_empty(), "few-shot 范文踩了自己的红线: {red:?}");
+    }
+
+    #[test]
+    fn cross_vendor_article_is_rejected() {
+        // 给阿贝云续期，模型却把范文里的三丰云元素带进来 → 必须打回
+        let mut s = String::from("# 阿贝云免费云服务器实测：三丰云用户也说好\n\n阿贝云 免费云服务器 免费虚拟主机 https://www.sanfengyun.com 不错\n\n");
+        for i in 0..8 { s.push_str(&format!("- 优点{i}：稳定\n")); }
+        s.push_str(&"z".repeat(1000));
+        let problems = validate(&s, "阿贝云", &[], &[]);
+        assert!(problems.iter().any(|p| p.contains("串厂商")), "漏拦另一厂商名: {problems:?}");
+        assert!(problems.iter().any(|p| p.contains("官网链接")), "漏拦错误域名: {problems:?}");
+        // 换成本家名字+本家域名后必须放行
+        let fixed = s.replace("三丰云用户也说好", "半年观察").replace("sanfengyun", "abeiyun");
+        assert!(validate(&fixed, "阿贝云", &[], &[]).is_empty(), "本家文章被误杀");
     }
 
     #[test]

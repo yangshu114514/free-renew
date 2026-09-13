@@ -17,6 +17,10 @@ on:
         description: "可选：填厂商名(三丰云/阿贝云)只探知乎发文链路(建草稿不发布)；留空走正常续期"
         required: false
         default: ""
+      test_platforms:
+        description: "可选：填任意值，把已配置的所有发文平台各发一篇草稿体检（全部停在公开发布前，不占发文额度）"
+        required: false
+        default: ""
       test_write:
         description: "可选：填厂商名只生成文章样文输出到日志（不发文不碰知乎），验内容质量用"
         required: false
@@ -79,6 +83,8 @@ jobs:
       LLM_MODEL: ${{ secrets.LLM_MODEL }}
       # 发文平台：默认 csdn；仓库 Settings→Variables 加 PLATFORM_PROVIDER=zhihu 即切知乎
       PLATFORM_PROVIDER: ${{ vars.PLATFORM_PROVIDER || 'csdn' }}
+      # 兜底平台：留空=自动（两家 Cookie 都配了就互为备份，主挂切备）；none=关闭
+      PLATFORM_FALLBACK: ${{ vars.PLATFORM_FALLBACK }}
       CSDN_COOKIES: ${{ secrets.CSDN_COOKIES }}
       ZHIHU_COOKIES: ${{ secrets.ZHIHU_COOKIES }}
       # 知乎发文话题（可选，空格分隔；留空用内置默认"免费云服务器 虚拟主机"）
@@ -122,7 +128,7 @@ jobs:
       - name: Run renewal
         run: |
           # 诊断输入互斥，按此优先级取第一个非空者（与 probe.rs 的分派顺序一致）：
-          # submit_existing > test_write > test_zhihu > test_screenshot
+          # submit_existing > test_write > test_zhihu > test_platforms > test_screenshot > test_notify
           if [ -n "$SUBMIT_EXISTING" ]; then
             echo "[submit-existing] 复用已发布文章，只重试截图+提交（不重新发文）: $SUBMIT_EXISTING"
             ./target/release/free-renew --submit-existing "$SUBMIT_VENDOR" "$SUBMIT_EXISTING" "$SUBMIT_TITLE"
@@ -132,6 +138,9 @@ jobs:
           elif [ -n "$TEST_ZHIHU" ]; then
             echo "[test mode] 知乎发文链路探路（建草稿不发布）: vendor=$TEST_ZHIHU"
             ./target/release/free-renew --test-zhihu "$TEST_ZHIHU"
+          elif [ -n "$TEST_PLATFORMS" ]; then
+            echo "[test mode] 发文平台链路体检（各平台发草稿，停在发布前）"
+            ./target/release/free-renew --test-platforms
           elif [ -n "$TEST_SCREENSHOT_URL" ]; then
             echo "[test mode] 只验证截图链路: $TEST_SCREENSHOT_URL"
             ./target/release/free-renew --test-screenshot "$TEST_SCREENSHOT_URL" "$TEST_SCREENSHOT_TITLE"
@@ -145,6 +154,7 @@ jobs:
           TEST_SCREENSHOT_URL: ${{ inputs.test_screenshot_url }}
           TEST_SCREENSHOT_TITLE: ${{ inputs.test_screenshot_title }}
           TEST_ZHIHU: ${{ inputs.test_zhihu }}
+          TEST_PLATFORMS: ${{ inputs.test_platforms }}
           TEST_WRITE: ${{ inputs.test_write }}
           SUBMIT_EXISTING: ${{ inputs.submit_existing }}
           SUBMIT_VENDOR: ${{ inputs.submit_vendor }}
