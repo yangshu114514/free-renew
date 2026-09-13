@@ -7,11 +7,13 @@
 //! - `--test-screenshot <url> [title]`  截图链路（WAF 挑战 + Cookie 注入 + 标题渲染）
 //! - `--test-write [vendor]`  只生成样文并打印（不发文、不碰知乎/厂商），验内容质量
 //! - `--test-zhihu [vendor]`  知乎发文链路探路：建草稿+写正文+挂话题，**不发布**，返回编辑链接
+//! - `--test-platforms`     已配置的发文平台逐个试链路：全部停在发布前
+//!   （知乎=草稿编辑链接，CSDN=草稿预览），零公开贴文
 //! - `--submit-existing <vendor> <url> [title]`  复用已发布文章只重试截图+提交
 //!
 //! 同传多个子命令时，分派优先级必须与 renew.yml 的 if/elif 顺序一致
-//! （submit-existing > test-write > test-zhihu > test-screenshot > test-notify），
-//! 否则"手动触发以为跑 A、实际跑了 B"。改任何一边都要同步另一边。
+//! （submit-existing > test-write > test-zhihu > test-platforms > test-screenshot >
+//! test-notify），否则"手动触发以为跑 A、实际跑了 B"。改任何一边都要同步另一边。
 
 use anyhow::{bail, Result};
 use serde_json::json;
@@ -19,7 +21,7 @@ use serde_json::json;
 use crate::cloud;
 use crate::config::AppConfig;
 use crate::logging::{self, RunContext};
-use crate::{login_cookie, notify, screenshot, writer, zhihu};
+use crate::{cookie_for_url, notify, publish_on, screenshot, writer};
 
 /// vendor 位置参数：取 flag 后第一个非 `--` 参数，缺省"三丰云"。
 fn vendor_arg(flag: &str) -> String {
@@ -57,7 +59,7 @@ fn test_screenshot(cfg: &AppConfig, run: &RunContext) -> Result<()> {
         .nth(pos + 1)
         .ok_or_else(|| anyhow::anyhow!("--test-screenshot 需要一个文章 URL 参数"))?;
     let title = std::env::args().nth(pos + 2).unwrap_or_default();
-    let pic = screenshot::capture(&url, &title, &logging::debug_dir(), login_cookie(cfg), "probe")?;
+    let pic = screenshot::capture(&url, &title, &logging::debug_dir(), cookie_for_url(cfg, &url), "probe")?;
     let meta = std::fs::metadata(&pic)?;
     let _ = run; // 截图探测无需落 JSONL 事件
     println!("截图成功: {} ({} bytes)", pic.display(), meta.len());
@@ -86,32 +88,78 @@ fn test_write(cfg: &AppConfig, run: &RunContext) -> Result<()> {
 }
 
 fn test_zhihu(cfg: &AppConfig, run: &RunContext) -> Result<()> {
-    let Some(zh) = &cfg.zhihu else {
+    let zh_ready = cfg.zhihu.as_ref().map(|z| !z.cookie.trim().is_empty()).unwrap_or(false);
+    if !zh_ready {
         anyhow::bail!("--test-zhihu 需要知乎 Cookie：设 ZHIHU_COOKIES 环境变量或 config.toml [platform.zhihu]");
-    };
+    }
     let vendor = vendor_arg("--test-zhihu");
-    let (title, html) = match &cfg.llm {
+    let article = match &cfg.llm {
         Some(llm) => {
             let a = writer::generate_article(llm, &vendor)?;
             println!("生成文章: {} ({} 字)", a.title, a.word_count);
-            (a.title, crate::markdown::to_html(&a.body_markdown, false))
+            a
         }
         None => {
             tracing::warn!("未配置 LLM，用固定样例正文探路（仅验证接口，不验证内容质量）");
-            (
-                format!("{vendor} 连通性测试草稿"),
-                "<p>这是一条来自 free-renew 的接口探路草稿，非正式文章，可删。</p>".to_string(),
-            )
+            writer::Article {
+                title: format!("{vendor} 连通性测试草稿（可删）"),
+                body_markdown: "这是一条来自 free-renew 的接口探路草稿，非正式文章，可删。".to_string(),
+                word_count: 30,
+            }
         }
     };
-    let client = zhihu::ZhihuClient::new(zh)?;
-    let edit = client.publish(&title, &html, &zh.topics, zh.toc, false)?;
+    let edit = publish_on(cfg, "zhihu", &vendor, &article, false)?;
     run.event("test_zhihu", "ok", json!({"vendor": vendor, "draft_edit": edit}));
     println!(
         "知乎草稿探路成功（未发布）。打开这个链接在浏览器里看排版/话题/内容：\n  {edit}\n\
          满意后删掉该草稿，再把 PLATFORM_PROVIDER 设为 zhihu 走正式发布。"
     );
     Ok(())
+}
+
+/// 发文平台链路体检：把**已配置**的平台各发一篇草稿（停在公开门槛前一步），
+/// 一次看清"知乎挂没挂、CSDN 兜底还活着吗"。零公开贴文、零厂商请求。
+fn test_platforms(cfg: &AppConfig, run: &RunContext) -> Result<()> {
+    let article = writer::Article {
+        title: "free-renew 发文平台链路测试草稿（未发布，可删）".to_string(),
+        body_markdown: "# free-renew 发文平台链路测试草稿\n\n这是安装/巡检时自动生成的链路测试内容，不会发布。\n以草稿形态存在，验证后请直接删除。\n".to_string(),
+        word_count: 60,
+    };
+    let ready = |c: Option<&str>| c.map(|s| !s.trim().is_empty()).unwrap_or(false);
+    let mut tried = Vec::new();
+    if let Some(zh) = &cfg.zhihu {
+        if ready(Some(&zh.cookie)) {
+            tried.push(("zhihu", publish_on(cfg, "zhihu", "平台体检", &article, false)));
+        }
+    }
+    if let Some(cs) = &cfg.csdn {
+        if ready(Some(&cs.cookie)) {
+            tried.push(("csdn", publish_on(cfg, "csdn", "平台体检", &article, false)));
+        }
+    }
+    if tried.is_empty() {
+        anyhow::bail!("两个发文平台的 Cookie 都没配置，没有可体检的链路（跑 install.ps1 或采集脚本）");
+    }
+    let mut ok_any = false;
+    for (p, r) in tried {
+        match r {
+            Ok(link) => {
+                ok_any = true;
+                println!("✅ {p} 链路可用（草稿停在发布前）: {link}");
+                run.event("test_platforms", "ok", json!({"platform": p, "draft": link}));
+            }
+            Err(e) => {
+                println!("❌ {p} 链路失败: {e:#}");
+                run.event("test_platforms", "failed", json!({"platform": p, "error": format!("{e:#}")}));
+            }
+        }
+    }
+    println!(
+        "体检结论：主={} 兜底={}｜去平台侧把测试草稿删除。",
+        cfg.platform_provider,
+        cfg.platform_fallback.as_deref().unwrap_or("无")
+    );
+    if ok_any { Ok(()) } else { anyhow::bail!("所有已配置平台链路均失败——对照上面原因逐个修 Cookie/风控") }
 }
 
 /// `--submit-existing <vendor> <url> [title]`：复用一篇**已发布**的文章，只做
@@ -148,7 +196,7 @@ fn submit_existing(cfg: &AppConfig, run: &RunContext) -> Result<()> {
     tracing::warn!("submit-existing：当前状态 {state:?}（忽略，直接尝试提交现成文章）");
 
     let dbg = logging::debug_dir();
-    let pic = screenshot::capture(&url, &title, &dbg, login_cookie(cfg), vendor_key)?;
+    let pic = screenshot::capture(&url, &title, &dbg, cookie_for_url(cfg, &url), vendor_key)?;
     let meta = std::fs::metadata(&pic).ok();
     tracing::info!("截图就绪 {} 字节，提交中…", meta.as_ref().map(|m| m.len()).unwrap_or(0));
     let result = client.submit_renewal(&url, &pic);
@@ -172,7 +220,7 @@ fn submit_existing(cfg: &AppConfig, run: &RunContext) -> Result<()> {
 }
 
 /// 命中任一 `--test-*` 子命令 → 执行并返回 true（main 提前退出）；否则 false。
-/// 判定顺序 = renew.yml if/elif 优先级（submit > write > zhihu > screenshot > notify）。
+/// 判定顺序 = renew.yml if/elif 优先级（submit>write>zhihu>platforms>screenshot>notify）。
 pub fn run_if_probe(cfg: &AppConfig, run: &RunContext) -> Result<bool> {
     // 参数收集一次：原先每判定一个子命令就把整个 argv 重新遍历一遍
     let args: Vec<String> = std::env::args().collect();
@@ -180,6 +228,7 @@ pub fn run_if_probe(cfg: &AppConfig, run: &RunContext) -> Result<bool> {
     if has("--submit-existing") { submit_existing(cfg, run)?; return Ok(true); }
     if has("--test-write") { test_write(cfg, run)?; return Ok(true); }
     if has("--test-zhihu") { test_zhihu(cfg, run)?; return Ok(true); }
+    if has("--test-platforms") { test_platforms(cfg, run)?; return Ok(true); }
     if has("--test-screenshot") { test_screenshot(cfg, run)?; return Ok(true); }
     if has("--test-notify") { test_notify(cfg, run)?; return Ok(true); }
     Ok(false)

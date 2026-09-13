@@ -6,7 +6,7 @@
 
 GitHub Actions 每天定时拉起本仓库的 Rust 二进制：登录云厂商查续期状态，没到期几秒退出；到期则用 LLM 生成一篇体验文章 → 发布到**内容平台** → 浏览器截图 → 连同截图提交给厂商人工审核。成功/失败通过你配置的通知渠道告警（不配则仅 Actions 页可见）。
 
-发文这一步支持 **CSDN** 和 **知乎** 两个平台，二选一，安装时选、之后可换。
+发文这一步支持 **CSDN** 和 **知乎** 两个平台：二选一，或**两家都连**（知乎优先、CSDN 自动兜底）。安装时选、之后可换。
 
 ## 前置条件
 
@@ -60,13 +60,16 @@ gh secret set LLM_MODEL           --body "模型名"
 
 > ⚠️ 用 gh 设 Secret 时，值必须用 `--body "实际值"` 直接给；`--body -` 会把 Secret 存成字面量 `-`（gh 只在完全不给 `--body` 时才读 stdin）。
 
-### 3. 选发文平台（二选一）
+### 3. 选发文平台（二选一，或两家都连）
 
-平台由仓库 **Variable** `PLATFORM_PROVIDER` 决定（默认 `csdn`）：
+主平台由仓库 **Variable** `PLATFORM_PROVIDER` 决定（默认 `csdn`），兜底由 `PLATFORM_FALLBACK` 决定：
 
 ```bash
 gh variable set PLATFORM_PROVIDER --body "csdn"    # 或 zhihu
+gh variable set PLATFORM_FALLBACK --body "none"    # 或 csdn/zhihu；不设置=自动
 ```
+
+兜底语义：主平台发文失败时**自动换兜底平台重发一次**（两家都失败才报错），并推通知"已切换"提醒排查主平台。`PLATFORM_FALLBACK` 不设置时走**自动**：哪家 Cookie 也配了就互为备份；显式设 `none` 关闭。注意 `install.ps1` 选单平台时会显式写 `none`（避免残留的旧 Cookie 悄悄启用互备）。
 
 #### 平台 A：CSDN
 
@@ -94,6 +97,17 @@ Linux/macOS：`cargo run --release --bin csdn_cookie_export`，把打印的单�
 
 3. 话题（可选）：`gh variable set ZHIHU_TOPICS --body "免费云服务器 虚拟主机"`（空格分隔，不设用此默认）。知乎发文通常必须挂话题，脚本会精确匹配并自动排除带其它云品牌名的话题。
 
+#### 平台 C：两家都连（知乎优先 + CSDN 兜底）
+
+把 A、B 两家的 Cookie Secret 都配齐，然后：
+
+```bash
+gh variable set PLATFORM_PROVIDER --body "zhihu"
+gh variable set PLATFORM_FALLBACK --body "csdn"     # 或删掉本变量走自动
+```
+
+知乎链路哪天出问题（Cookie 过期、弹验证码、风控拒发），当轮续期自动改由 CSDN 发文提交，同时你会收到"已切换兜底"通知——**兜底是保命的，不是免责的**，收到切换通知后要尽快修主平台。截图注入的登录 Cookie 按文章实际所在域选择，切换后不会把知乎 Cookie 带到 CSDN 页面。装好后用 `test_platforms` 输入触发一次"双平台草稿体检"（见第 5 步），确认两条链路都通。
+
 ### 4. 通知（可选，强烈建议）
 
 没有通知 = 出事你不知道。二选一：
@@ -108,6 +122,8 @@ Linux/macOS：`cargo run --release --bin csdn_cookie_export`，把打印的单�
 知乎路线**强烈建议先探路**：Actions 页 Run workflow，`test_zhihu` 填 `三丰云`——只建草稿不发布，日志给出草稿编辑链接，你亲自核对内容质量与话题无误、且不触发验证码。确认干净后再正式用。
 
 （想只看生成质量、连草稿都不建：`test_write` 填厂商名，样文打进日志。）
+
+两家都连的用户：`test_platforms` 填任意值——知乎与 CSDN 各发一篇**草稿**（全部停在公开发布前一步，不占发文额度），日志给出两条草稿链接，一次看清主/备两条链路是否都活着。验证后去平台侧把测试草稿删掉。
 
 正式点火：Actions → free-server-renewal → Run workflow。首次含 Linux 编译约 4 分钟。绿了之后，按仓库 cron（默认每天 09:30 北京时间）自动检查；没到期几秒退出。
 
@@ -156,7 +172,7 @@ gh secret set NOTIFY_OPENCLAW_PASSWORD --body "bot密码"
 
 ### 想换发文平台
 
-改一个 Variable 即可，其余不动：`gh variable set PLATFORM_PROVIDER --body "zhihu"`（或 `csdn`），并确保对应平台的 Cookie Secret 已就绪。
+改 Variable 即可，其余不动：`gh variable set PLATFORM_PROVIDER --body "zhihu"`（或 `csdn`），并确保对应平台的 Cookie Secret 已就绪。想同时保留另一家作兜底：`gh variable set PLATFORM_FALLBACK --body "csdn"`（两家 Cookie 都要在）；彻底单平台用 `--body "none"`。
 
 ---
 

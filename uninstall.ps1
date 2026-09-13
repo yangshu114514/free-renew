@@ -10,7 +10,7 @@
 
   清理范围：
   - GitHub Secrets：SANFENGYUN_*、ABEIYUN_*、LLM_*、CSDN_COOKIES、ZHIHU_COOKIES、NOTIFY_*
-  - GitHub Variables：PLATFORM_PROVIDER、ZHIHU_TOPICS
+  - GitHub Variables：PLATFORM_PROVIDER、PLATFORM_FALLBACK、ZHIHU_TOPICS
   - 本地：专用 cookie profile 目录 + %TEMP% 里的 *_cookies_oneline.txt
 
   保留（不碰）：本仓库代码、你的 GitHub Actions 定时任务记录、厂商/内容平台的真实账号。
@@ -45,7 +45,7 @@ $SECRETS = @(
     "NOTIFY_OPENCLAW_URL","NOTIFY_OPENCLAW_USER","NOTIFY_OPENCLAW_PASSWORD",
     "NOTIFY_WEBHOOK_URL"
 )
-$VARS = @("PLATFORM_PROVIDER","ZHIHU_TOPICS")
+$VARS = @("PLATFORM_PROVIDER","PLATFORM_FALLBACK","ZHIHU_TOPICS")
 
 # 只有显式 -Execute 才真删；否则一律演练。
 $doDelete = $Execute.IsPresent -and -not $DryRun.IsPresent
