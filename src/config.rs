@@ -99,11 +99,37 @@ pub struct AppConfig {
     pub accounts: Vec<CloudAccount>,
     pub llm: Option<LlmConfig>,
     pub platform_provider: String,
+    /// 主平台发文失败时自动切换的备胎（Some 且 != provider 才生效）
+    pub platform_fallback: Option<String>,
     pub csdn: Option<CsdnConfig>,
     pub zhihu: Option<ZhihuConfig>,
     pub notify: NotifyConfig,
     pub article_ready_timeout: u64,
     pub http_timeout: u64,
+}
+
+/// 兜底平台判定（纯函数便于测试）。explicit 来自 PLATFORM_FALLBACK / 文件段：
+/// - "none"（或大小写等价）→ 关闭兜底；与主平台同名 → 等价于关闭
+/// - 其它值 → 原样采用（配置错名会在发文时报"未知发文平台"，不静默）
+/// - 未设置 → 自动：主平台之外、另一家 Cookie 已就绪就兜底（两家都连即互为备份）
+fn resolve_fallback(
+    primary: &str,
+    explicit: Option<String>,
+    csdn_ready: bool,
+    zhihu_ready: bool,
+) -> Option<String> {
+    if let Some(e) = explicit {
+        let e = e.to_ascii_lowercase();
+        if e == "none" || e == primary {
+            return None;
+        }
+        return Some(e);
+    }
+    match primary {
+        "zhihu" if csdn_ready => Some("csdn".into()),
+        "csdn" if zhihu_ready => Some("zhihu".into()),
+        _ => None,
+    }
 }
 
 impl AppConfig {
@@ -251,6 +277,16 @@ impl AppConfig {
                     toc: false,
                 })
             });
+        // 兜底：显式 PLATFORM_FALLBACK / 文件段优先，未设则"两家都连即自动互备"
+        let csdn_ready = csdn.as_ref().map(|c| !c.cookie.trim().is_empty()).unwrap_or(false);
+        let zhihu_ready = zhihu.as_ref().map(|z| !z.cookie.trim().is_empty()).unwrap_or(false);
+        let platform_fallback = resolve_fallback(
+            &provider,
+            env("PLATFORM_FALLBACK").or(file.as_ref().and_then(|f| f.platform.fallback.clone())),
+            csdn_ready,
+            zhihu_ready,
+        );
+
         let notify_file = file.as_ref().map(|f| f.notify.clone()).unwrap_or_default();
         // OpenClaw 后端：文件段与 NOTIFY_OPENCLAW_* 环境变量二选一即可。
         // 环境变量路径必须独立成立——GitHub Actions 部署没有 config.toml，
@@ -297,11 +333,31 @@ impl AppConfig {
             accounts,
             llm,
             platform_provider: provider,
+            platform_fallback,
             csdn,
             zhihu,
             notify,
             article_ready_timeout,
             http_timeout,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fallback_resolution_matrix() {
+        // 自动：知乎为主 + CSDN 就绪 → 兜底 csdn；CSDN 未配置 → 无兜底
+        assert_eq!(resolve_fallback("zhihu", None, true, true).as_deref(), Some("csdn"));
+        assert_eq!(resolve_fallback("zhihu", None, false, true), None);
+        assert_eq!(resolve_fallback("csdn", None, true, true).as_deref(), Some("zhihu"));
+        assert_eq!(resolve_fallback("csdn", None, true, false), None);
+        // 显式覆盖：none 关兜底；与主同名视为关；其它值原样采用（错名在发文时明确报错）
+        assert_eq!(resolve_fallback("zhihu", Some("none".into()), true, true), None);
+        assert_eq!(resolve_fallback("zhihu", Some("NONE".into()), true, true), None);
+        assert_eq!(resolve_fallback("zhihu", Some("zhihu".into()), true, true), None);
+        assert_eq!(resolve_fallback("zhihu", Some("CSDN".into()), false, true).as_deref(), Some("csdn"));
     }
 }

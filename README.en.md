@@ -19,12 +19,13 @@ The wizard runs 6 steps: repo → cloud account passwords → LLM API (optional 
 
 Linux/macOS or manual route: clone the repo and follow [docs/SETUP.md](docs/SETUP.md).
 
-## Publish platform: CSDN or Zhihu
+## Publish platform: CSDN / Zhihu (both supported, with automatic fallback)
 
-Renewal articles must go to a third-party content platform for the vendor's human review. Pick one at install; switchable later:
+Renewal articles must go to a third-party content platform for the vendor's human review. Pick one — or both — at install; switchable later:
 
 - **CSDN** (default): needs a CSDN account with blog enabled; cookie captured automatically by `scripts/refresh-csdn-cookie.ps1`. Simplest.
 - **Zhihu**: needs an account that can post normally; cookie captured via CDP by `scripts/refresh-zhihu-cookie.ps1` (the `z_c0` auth cookie is httpOnly). ⚠️ Auto-posting to Zhihu from a datacenter IP risks triggering their risk control; the code stops-and-does-not-retry on captcha/403, but the IP-profile risk can't be removed by code. If the account matters, use CSDN.
+- **Both (recommended)**: Zhihu publishes first; if that pipeline fails (expired cookie / captcha / risk-control reject) the article is **automatically published via CSDN** instead, plus a notification to fix the primary. After setup, the `test_platforms` dispatch input sends one *draft* on each platform (everything stops before going public; no quota used) as a health check.
 
 ## Daily use: one command
 
@@ -42,7 +43,7 @@ The dedicated browser profile usually keeps you logged in — the script re-expo
 - **Content red-line**: the generator hard-rejects review landmine terms (VPN/circumvention, intranet tunneling, no-ICP-filing, gray-industry, politics, …). A hit triggers a rewrite; repeated hits **abort the run rather than publish** — better to skip a renewal than post borderline content that could strike your platform account.
 - **Publish → screenshot waits for the article to go public**: Zhihu/CSDN newly-published posts are briefly invisible; the screenshot step polls until it's live, so a login-wall page is never submitted as a "screenshot".
 - **`--submit-existing`**: if publishing succeeded but only the "upload screenshot to vendor" POST died on network flakiness, reuse the already-published article to retry screenshot+submit **without re-posting** — no extra articles spamming your account.
-- Diagnostic entry points (`--test-write` / `--test-zhihu` / screenshot test / the recovery above) are documented in [docs/SETUP.md](docs/SETUP.md) → "手动触发与故障恢复".
+- Diagnostic entry points (`--test-write` / `--test-zhihu` / `--test-platforms` two-platform draft health-check / screenshot test / the recovery above) are documented in [docs/SETUP.md](docs/SETUP.md). → "手动触发与故障恢复".
 
 > The installer supports a `-DryRun` preview: `.\install.ps1 -DryRun` prints what it would do without forking, writing secrets, or triggering the workflow.
 

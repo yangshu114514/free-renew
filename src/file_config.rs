@@ -55,6 +55,9 @@ impl Default for CloudAccountConfig {
 pub struct PlatformSection {
     /// 发文平台：csdn | zhihu
     pub provider: Option<String>,
+    /// 主平台发文失败时的兜底：csdn | zhihu | none(关)。留空=自动：
+    /// 两家 Cookie 都配了就互为备份（知乎为主失败切 CSDN）
+    pub fallback: Option<String>,
     pub csdn: Option<CsdnPlatformConfig>,
     pub zhihu: Option<ZhihuPlatformConfig>,
 }

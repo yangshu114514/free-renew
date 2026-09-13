@@ -16,6 +16,10 @@ enabled = true
 # ── 发文平台 ───────────────────────────────────────────
 [platform]
 provider = "csdn"              # 当前支持: csdn | zhihu（知乎，见下方 [platform.zhihu]）
+# 主平台发文失败时自动换的兜底：csdn | zhihu | none（关）。
+# 留空/注释掉 = 自动：两家 Cookie 都配了就互为备份（知乎挂→切CSDN，并通知排查）。
+# GitHub Actions 场景对应仓库 Variables: PLATFORM_FALLBACK。
+# fallback = "csdn"
 
 [platform.csdn]
 # 完整 Cookie（单行 k=v; k=v 形态，由 csdn_cookie_export 采集器产出）

@@ -19,12 +19,13 @@ irm https://raw.githubusercontent.com/yangshu114514/free-renew/main/install.ps1 
 
 Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.md) 手动走一遍（内容相同，含两个发文平台的采集方式、可选的 OpenClaw 微信通知接线、故障速查表）。
 
-## 发文平台：CSDN 或 知乎
+## 发文平台：CSDN / 知乎（可两家都连，自动兜底）
 
-续期文章要发到第三方内容平台供厂商审核，二选一，装时选、日后可换：
+续期文章要发到第三方内容平台供厂商审核，二选一或两家都连，装时选、日后可换：
 
 - **CSDN**（默认）：需已开通博客的 CSDN 号，Cookie 用 `scripts/refresh-csdn-cookie.ps1` 自动采集，最省心。
 - **知乎**：需发帖正常的号；Cookie 用 `scripts/refresh-zhihu-cookie.ps1` 走 CDP 抓 httpOnly 的 `z_c0`。⚠️ 知乎在 Actions 机房 IP 上自动发帖有触发风控的实质风险，代码做到"弹验证码即停不重试"，但画像风险无法消除——号很重要请选 CSDN。
+- **两家都连（推荐）**：知乎优先发文，知乎链路故障（Cookie 过期/验证码/风控拒发）时**自动改由 CSDN 发出**并通知你排查主平台。装好后 `test_platforms` 输入可让两家各发一篇草稿做链路体检（停在公开发布前，不占发文额度）。
 
 ## 日常使用：只有一个命令
 
@@ -46,7 +47,7 @@ Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.m
 - **内容安全红线**：生成端内置审核雷区一票否决（翻墙/内网穿透/免备案/灰产/政治等），命中就重写、连续命中则放弃本轮**绝不发**——宁可不续，也不发一篇可能连累你内容平台账号的擦边文（被真实删稿后加的护栏）。
 - **发文→截图会等文章真正公开**：知乎/CSDN 刚发的文常短时不可见，截图步骤轮询等放行再截，不提交"登录墙"垃圾图。
 - **`--submit-existing`**：发文成功却卡在"上传截图到厂商"的网络抖动时，用已发布文章**只重试截图+提交、不重发**，避免反复灌新文。
-- 诊断入口（`--test-write` / `--test-zhihu` / 截图测试 / 上述恢复）见 [docs/SETUP.md](docs/SETUP.md)「手动触发与故障恢复」。
+- 诊断入口（`--test-write` / `--test-zhihu` / `--test-platforms` 双平台草稿体检 / 截图测试 / 上述恢复）见 [docs/SETUP.md](docs/SETUP.md)「手动触发与故障恢复」。
 
 > 安装脚本支持 `-DryRun` 演练：`.\install.ps1 -DryRun` 只打印将执行的动作，不 fork、不写 Secret、不触发 workflow，可安全预览。
 

@@ -155,16 +155,17 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
         );
     }
 
-    // 3. 发布到发文平台
+    // 3. 发布到发文平台（主平台失败且有兜底时自动换平台）
     run.event(step("publish.start").as_str(), "ok", json!({
-        "vendor": vendor, "provider": cfg.platform_provider, "title": article.title,
+        "vendor": vendor, "provider": cfg.platform_provider,
+        "fallback": cfg.platform_fallback, "title": article.title,
     }));
-    let url = match publish_article(cfg, vendor, &article) {
-        Ok(u) => {
+    let pub_out = match publish_article(cfg, run, vendor, &article) {
+        Ok(o) => {
             run.event(step("publish.done").as_str(), "ok",
-                json!({"vendor": vendor, "provider": cfg.platform_provider, "url": u}));
-            tracing::info!("已发布: {u}");
-            u
+                json!({"vendor": vendor, "provider": o.platform, "fell_back": o.fell_back, "url": o.url}));
+            tracing::info!("已发布({}): {}", o.platform, o.url);
+            o
         }
         Err(e) => {
             let detail = format!("{e:#}");
@@ -173,6 +174,7 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
             return Ok(false);
         }
     };
+    let url = pub_out.url;
 
     // 4. 就绪检查（非致命：裸 HTTP 会被 CSDN WAF 521 挑战，仅作参考）
     //    真正的门禁在 screenshot::capture 内（Chrome 过挑战 + 标题验证）。
@@ -181,7 +183,7 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
     }
 
     let debug_dir = logging::debug_dir();
-    let pic = match screenshot::capture(&url, &article.title, &debug_dir, login_cookie(cfg), profile_key) {
+    let pic = match screenshot::capture(&url, &article.title, &debug_dir, cookie_for_url(cfg, &url), profile_key) {
         Ok(p) => {
             let meta = std::fs::metadata(&p).ok();
             run.event(step("screenshot").as_str(), "ok", json!({
@@ -239,20 +241,43 @@ fn process_account(cfg: &AppConfig, run: &logging::RunContext, profile_key: &str
     }
 }
 
-/// 截图 Chrome 的登录 Cookie：随发文平台走（知乎文章页用知乎 cookie，CSDN 用 CSDN）。
+/// 截图注入的登录 Cookie 按**文章实际所在域**选，而不是"配置的主平台"：
+/// 兜底切换后文章在 CSDN，若仍按主平台拿知乎 Cookie 注入，等于把 z_c0 泄漏到
+/// csdn.net 的请求头里（跨域凭据泄露），且版面/折叠行为也不对。
 /// 唯一来源是 config（config.rs 已合并 env/文件）。截公开文章页本无需登录态，
 /// 注入只为版面一致 + 规避"未登录访客"折叠/挑战。
-pub(crate) fn login_cookie(cfg: &AppConfig) -> Option<&str> {
-    let opt = match cfg.platform_provider.as_str() {
-        "zhihu" => cfg.zhihu.as_ref().map(|z| z.cookie.as_str()),
-        _ => cfg.csdn.as_ref().map(|c| c.cookie.as_str()),
+pub(crate) fn cookie_for_url<'a>(cfg: &'a AppConfig, url: &str) -> Option<&'a str> {
+    let opt = if url.contains("zhihu.") {
+        cfg.zhihu.as_ref().map(|z| z.cookie.as_str())
+    } else if url.contains("csdn.") {
+        cfg.csdn.as_ref().map(|c| c.cookie.as_str())
+    } else {
+        None
     };
     opt.filter(|c| !c.trim().is_empty())
 }
 
-/// 通过配置的发文平台发布文章，返回文章 URL。
-fn publish_article(cfg: &AppConfig, vendor: &str, article: &writer::Article) -> Result<String> {
-    match cfg.platform_provider.as_str() {
+/// 发布产物：URL + 实际落在哪个平台（截图 Cookie 选择、通知、排障都要看真实值）
+#[derive(Debug)]
+pub(crate) struct Published {
+    pub url: String,
+    pub platform: String,
+    /// 主平台失败、由兜底平台发出
+    pub fell_back: bool,
+    /// 主平台的失败原因（fell_back 时供事件/通知展示）
+    pub primary_reason: Option<String>,
+}
+
+/// 往指定平台发一篇。`final_publish=false` = 草稿模式（知乎停在发布前/CSDN 存草稿），
+/// 链路测试用——"发到公开门槛之前一步拦截"。
+pub(crate) fn publish_on(
+    cfg: &AppConfig,
+    platform: &str,
+    vendor: &str,
+    article: &writer::Article,
+    final_publish: bool,
+) -> Result<String> {
+    match platform {
         "csdn" => {
             let Some(csdn_cfg) = &cfg.csdn else {
                 anyhow::bail!("发文平台为 csdn 但未配置 Cookie（config.toml [platform.csdn] 或 CSDN_COOKIES 环境变量）");
@@ -269,7 +294,7 @@ fn publish_article(cfg: &AppConfig, vendor: &str, article: &writer::Article) -> 
                 &tags,
                 &csdn_cfg.categories,
                 csdn_cfg.creation_statement,
-                true, // publish；草稿模式留给人工确认场景
+                final_publish,
             )
         }
         "zhihu" => {
@@ -286,15 +311,75 @@ fn publish_article(cfg: &AppConfig, vendor: &str, article: &writer::Article) -> 
                 &crate::markdown::to_html(&article.body_markdown, false),
                 &zh.topics,
                 zh.toc,
-                true, // 正式发布
+                final_publish,
             )
         }
         other => anyhow::bail!("未知发文平台: {other}（当前支持: csdn, zhihu）"),
     }
     .map_err(|e| {
         // 平台名进错误上下文，通知里能看出是哪家发文失败
-        anyhow::anyhow!("[{vendor}] {e}")
+        anyhow::anyhow!("[{platform}|{vendor}] {e}")
     })
+}
+
+/// 主/备编排（对发布动作泛型化，纯逻辑可单测）：主平台成功即返回；失败且配了
+/// 兜底则换平台重试一次；两家都失败时错误里保留两个根因。
+fn choose_and_publish<F>(primary: &str, fallback: Option<&str>, mut publish: F) -> Result<Published>
+where
+    F: FnMut(&str) -> Result<String>,
+{
+    match publish(primary) {
+        Ok(url) => Ok(Published { url, platform: primary.to_string(), fell_back: false, primary_reason: None }),
+        Err(e1) => {
+            let reason = format!("{e1:#}");
+            let Some(fb) = fallback.filter(|x| *x != primary) else {
+                anyhow::bail!("{reason}");
+            };
+            tracing::warn!("主平台 {primary} 发文失败，自动切换兜底 {fb}: {reason}");
+            match publish(fb) {
+                Ok(url) => Ok(Published {
+                    url,
+                    platform: fb.to_string(),
+                    fell_back: true,
+                    primary_reason: Some(reason),
+                }),
+                Err(e2) => anyhow::bail!("主({primary})与兜底({fb})均发文失败｜主因: {reason}｜兜底因: {e2:#}"),
+            }
+        }
+    }
+}
+
+/// 续期流程的正式发文：主/备编排 + 切换事件与通知（主平台健康度要让人知道）。
+fn publish_article(
+    cfg: &AppConfig,
+    run: &logging::RunContext,
+    vendor: &str,
+    article: &writer::Article,
+) -> Result<Published> {
+    let out = choose_and_publish(
+        &cfg.platform_provider,
+        cfg.platform_fallback.as_deref(),
+        |p| publish_on(cfg, p, vendor, article, true),
+    )?;
+    if out.fell_back {
+        run.event("publish.fallback", "switched", json!({
+            "vendor": vendor,
+            "from": cfg.platform_provider,
+            "to": out.platform,
+            "reason": out.primary_reason,
+        }));
+        notify::send(
+            &cfg.notify,
+            &format!("{vendor} 发文已切换兜底平台 {}", out.platform),
+            &format!(
+                "主平台 {} 失败：{}\n文章已改由 {} 发出；主平台需要人工排查（Cookie 过期/风控）。",
+                cfg.platform_provider,
+                out.primary_reason.as_deref().unwrap_or("未知"),
+                out.platform
+            ),
+        );
+    }
+    Ok(out)
 }
 
 fn main() -> Result<()> {
@@ -373,5 +458,81 @@ fn main() -> Result<()> {
     run.event("run.end", "ok", summary);
     tracing::info!("=== free-renew 结束，耗时 {} 秒 ===", run.elapsed_secs());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{CsdnConfig, NotifyConfig, ZhihuConfig};
+
+    fn cfg_both() -> AppConfig {
+        AppConfig {
+            accounts: vec![],
+            llm: None,
+            platform_provider: "zhihu".into(),
+            platform_fallback: Some("csdn".into()),
+            csdn: Some(CsdnConfig {
+                cookie: "u=1".into(),
+                creation_statement: 1,
+                tags: vec![],
+                categories: vec![],
+                app_secret: "s".into(),
+                x_ca_key: "k".into(),
+            }),
+            zhihu: Some(ZhihuConfig { cookie: "z_c0=x".into(), topics: vec![], toc: false }),
+            notify: NotifyConfig { webhook_url: String::new(), tag: String::new(), openclaw: None },
+            article_ready_timeout: 1,
+            http_timeout: 1,
+        }
+    }
+
+    #[test]
+    fn cookie_follows_article_domain_not_primary() {
+        // 主平台 zhihu、文章却兜底落在 CSDN 时：截图必须拿 CSDN cookie，
+        // 绝不能把知乎 z_c0 带进 csdn 域（跨域凭据泄露）
+        let c = cfg_both();
+        assert_eq!(cookie_for_url(&c, "https://blog.csdn.net/x/details/1"), Some("u=1"));
+        assert_eq!(cookie_for_url(&c, "https://zhuanlan.zhihu.com/p/1"), Some("z_c0=x"));
+        assert_eq!(cookie_for_url(&c, "https://example.com/a"), None);
+    }
+
+    #[test]
+    fn publish_fallback_matrix() {
+        // 主成功 → 根本不叫兜底
+        let mut calls: Vec<String> = vec![];
+        let out = choose_and_publish("zhihu", Some("csdn"), |p| {
+            calls.push(p.to_string());
+            Ok("zh/1".into())
+        })
+        .unwrap();
+        assert!(!out.fell_back && out.platform == "zhihu");
+        assert_eq!(calls, vec!["zhihu".to_string()]);
+
+        // 主失败 → 兜底顶上，主因留档
+        let out = choose_and_publish("zhihu", Some("csdn"), |p| match p {
+            "zhihu" => Err(anyhow::anyhow!("auth 过期")),
+            _ => Ok("cs/2".into()),
+        })
+        .unwrap();
+        assert!(out.fell_back && out.platform == "csdn" && out.url == "cs/2");
+        assert!(out.primary_reason.as_deref().unwrap().contains("auth 过期"));
+
+        // 无兜底 → 原错上抛（不吞）
+        let e = choose_and_publish("zhihu", None, |p| match p {
+            "zhihu" => Err(anyhow::anyhow!("boom")),
+            _ => Ok("x".into()),
+        })
+        .unwrap_err();
+        assert!(format!("{e:#}").contains("boom"));
+
+        // 双失败 → 两个根因都要在错误里（只留一个就没法定位了）
+        let e = choose_and_publish("zhihu", Some("csdn"), |p| match p {
+            "zhihu" => Err(anyhow::anyhow!("zfail")),
+            _ => Err(anyhow::anyhow!("cfail")),
+        })
+        .unwrap_err();
+        let d = format!("{e:#}");
+        assert!(d.contains("zfail") && d.contains("cfail"), "{d}");
+    }
 }
 
