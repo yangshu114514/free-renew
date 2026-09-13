@@ -25,7 +25,7 @@ Renewal articles must go to a third-party content platform for the vendor's huma
 
 - **CSDN** (default): needs a CSDN account with blog enabled; cookie captured automatically by `scripts/refresh-csdn-cookie.ps1`. Simplest.
 - **Zhihu**: needs an account that can post normally; cookie captured via CDP by `scripts/refresh-zhihu-cookie.ps1` (the `z_c0` auth cookie is httpOnly). ⚠️ Auto-posting to Zhihu from a datacenter IP risks triggering their risk control; the code stops-and-does-not-retry on captcha/403, but the IP-profile risk can't be removed by code. If the account matters, use CSDN.
-- **Both (recommended)**: Zhihu publishes first; if that pipeline fails (expired cookie / captcha / risk-control reject) the article is **automatically published via CSDN** instead, plus a notification to fix the primary. After setup, the `test_platforms` dispatch input sends one *draft* on each platform (everything stops before going public; no quota used) as a health check.
+- **Both connected (you pick primary/backup)**: whichever platform is primary, if its pipeline fails (expired cookie / captcha / risk-control reject) the article is **automatically published via the other platform** in the same run, plus a notification to fix the primary. With only one platform's cookie configured, the other is never attempted. After setup, the `test_platforms` dispatch input sends one *draft* on each platform (everything stops before going public; no quota used) as a health check.
 
 ## Daily use: one command
 
