@@ -62,8 +62,10 @@ jobs:
 
   renew:
     runs-on: ubuntu-latest
-    # 5 轮重试 × 跨洋抖动，最坏单次续期可近 20 分钟；30 分易被网络重试撞墙，抬到 45
-    timeout-minutes: 45
+    # 最坏预算（两家同日都要续）：登录 5 轮重试×双端点 ≈4min/家，LLM 3 轮重试
+    # ≈6min/家，发文+截图轮询等公开 12min/家，提交 5 轮重试 ≈5min/家。
+    # 合计 ≈50+min——原先 45 会在第二家"已发文未提交"的半截处被杀。抬到 75。
+    timeout-minutes: 75
     permissions:
       contents: read
     env:
