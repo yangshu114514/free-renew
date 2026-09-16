@@ -2,7 +2,10 @@ name: free-server-renewal
 
 on:
   schedule:
-    - cron: "30 1 * * *" # 每天 09:30 北京时间；程序内部判断是否到期，幂等
+    # 每小时整点（UTC）跑一次。程序幂等：未到期 4 秒退出，只有续费窗口内（~5 天）才真干活。
+    # 原来每天 09:30 一班——境外 runner 抖动一次就错过当天；每小时多 24 倍机会，
+    # 大幅提高续费窗口内命中成功的概率。未到期 run 不发任何通知，不刷微信/邮件。
+    - cron: "0 * * * *" # 每小时整点（UTC）；程序内部判断是否到期，幂等
   workflow_dispatch: # 手动点火（Actions 页面按钮）
     inputs:
       test_screenshot_url:
