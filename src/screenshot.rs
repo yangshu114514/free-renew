@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 
 use anyhow::{bail, Context, Result};
+use headless_chrome::protocol::cdp::Network;
 
 /// 组装 Cookie 头：登录 Cookie（config 传入）+ WAF 挑战解出的 acw Cookie（如有）
 fn build_cookie_header(acw: Option<&str>, login: Option<&str>) -> HashMap<String, String> {
@@ -23,6 +24,23 @@ fn build_cookie_header(acw: Option<&str>, login: Option<&str>) -> HashMap<String
         headers.insert("Cookie".into(), merged);
     }
     headers
+}
+
+/// 把单行 "k1=v1; k2=v2" 登录 Cookie 串解析成 (name, value) 对，供种进 cookie jar。
+/// 空段 / 无名键跳过。值保留原样（不剥引号：知乎 z_c0 等 base64 值本就不带引号，
+/// 强行剥反而破坏少数合法含引号的值）。
+fn parse_cookie_pairs(cookie: &str) -> Vec<(String, String)> {
+    cookie
+        .split(';')
+        .filter_map(|kv| {
+            let (k, v) = kv.split_once('=')?;
+            let k = k.trim();
+            if k.is_empty() {
+                return None;
+            }
+            Some((k.to_string(), v.trim().to_string()))
+        })
+        .collect()
 }
 
 /// 对文章页截图（挑战感知：先过 WAF 挑战再截），返回截图路径。
@@ -109,6 +127,44 @@ pub fn capture(url: &str, title: &str, debug_dir: &Path, login_cookie: Option<&s
         tab.set_extra_http_headers(hdr_ref)
             .context("注入 Cookie 头失败")?;
         tracing::info!("已注入 Cookie 头（len={}）", headers.values().next().map(|v| v.len()).unwrap_or(0));
+    }
+
+    // ── 登录 Cookie 种进浏览器 cookie jar（document.cookie 可读）──
+    // set_extra_http_headers 只给出站 HTTP 请求加一个 `Cookie` 头，但知乎/CSDN
+    // 前端 JS 是用 document.cookie 读登录态判断的——extra HTTP 头**不进**
+    // document.cookie，前端仍把访问者当未登录，整页弹扫码登录框
+    // （2026-09 实测知乎专栏页复现：截图里满屏"扫码登录"二维码弹窗）。
+    // 这里先预导航让 tab.get_url() 落到文章域（set_cookies 内部据此定位 host），
+    // 再把登录 Cookie 逐条种成 host cookie；之后渲染循环每次 navigate 都带真实 jar。
+    // set_extra_http_headers 保留（HTTP 层双保险，CSDN 的 acw WAF Cookie 靠它）。
+    if let Some(login) = login_cookie {
+        let pairs = parse_cookie_pairs(login);
+        if !pairs.is_empty() {
+            // 预导航：只为让 set_cookies 能据 tab.get_url() 定位 host
+            if let Err(e) = tab.navigate_to(url).and_then(|_| tab.wait_until_navigated()) {
+                tracing::warn!("种 cookie 前预导航失败（仍尝试种入）: {e:#}");
+            }
+            // CDP 生成的 CookieParam 只有 name/value 必填（String）、其余 Option
+            // 且带 #[serde(default)]，但**没有** derive Default。用最小 JSON 反序列化
+            // 最稳（不手写 13 个字段、不赌 Default 是否存在）。
+            let params: Vec<Network::CookieParam> = pairs
+                .iter()
+                .map(|(n, v)| serde_json::json!({ "name": n, "value": v }))
+                .map(serde_json::from_value::<Network::CookieParam>)
+                .collect::<Result<Vec<_>, _>>()
+                .context("构造 cookie 参数失败")?;
+            match tab.set_cookies(params) {
+                Ok(()) => {
+                    tracing::info!(
+                        "已种 {} 条登录 Cookie 进浏览器 jar（document.cookie 可读）",
+                        pairs.len()
+                    );
+                }
+                Err(e) => tracing::warn!("种 Cookie jar 失败，仅靠 HTTP 头注入兜底: {e:#}"),
+            }
+        } else {
+            tracing::warn!("登录 Cookie 解析不出有效键值对，未种 jar（若文章在知乎/CSDN 可能仍弹登录墙）");
+        }
     }
 
     // title 为空 = 跳过标题匹配（只防挑战页）；非空 = 验证渲染的是真文章页
