@@ -780,6 +780,14 @@ fn main() -> Result<()> {
             "notify_backend": if cfg.notify.openclaw.is_some() { "openclaw" }
                 else if !cfg.notify.webhook_url.is_empty() { "webhook" }
                 else { "none" },
+            // 本次真正传进来的可选项环境变量名（只有名字，没有值）。
+            // 排障"我明明配了 X 却没生效"最快的一眼：变量没出现在这里，
+            // 就是它在工作流里没被透传（Actions 最常见的原因是 env 段少一行）。
+            "env_present": config::ENV_KEYS
+                .iter()
+                .copied()
+                .filter(|k| std::env::var(k).map(|v| !v.trim().is_empty()).unwrap_or(false))
+                .collect::<Vec<_>>(),
         }),
     );
 

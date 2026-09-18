@@ -197,7 +197,7 @@ function Remove-StaleCloudSecrets($keyPrefix, $keepCount) {
     }
     $varNames = @(gh variable list @repoArg 2>$null | ForEach-Object { ($_ -split '\s+')[0] })
     foreach ($n in $varNames) {
-        if ($n -match "^${keyPrefix}_LABEL_(\d+)$" -and [int]$Matches[1] -gt $keepCount) {
+        if ($n -match "^${keyPrefix}_(LABEL|ENABLED)_(\d+)$" -and [int]$Matches[2] -gt $keepCount) {
             gh variable delete $n @repoArg 2>$null | Out-Null
             if ($LASTEXITCODE -eq 0) { Ok "清理残留 Variable $n（账号数已减少，不再使用）" }
         }
@@ -372,12 +372,81 @@ if ($backend -eq "1") {
 
 # ── [6/6] 定时 + 部署确认 ────────────────────────────────────
 Step 6 "定时计划与部署"
-$t = Ask "每天几点(北京时间,0-23)自动检查并续期? (默认 9)" "9"
-if ($t -eq "") { $t = "9" }
-if ($t -notmatch "^\d{1,2}$" -or [int]$t -gt 23) { Die "小时格式不对" }
-$utcH = ([int]$t - 8 + 24) % 24
-$cron = "30 $utcH * * *"
-Write-Host "  cron = `"$cron`" (UTC) = 北京时间 ${t}:30"
+Write-Host @"
+  GitHub 的定时任务在高负载时会延迟或跳过，而"整点"正是最拥堵的时刻
+  （实测：写成整点时，一天只触发了 6 次而期望 24 次）。程序本身幂等，
+  未到期几秒退出、不刷通知，所以默认每小时查一次最稳，且刻意避开整点。
+"@ -ForegroundColor Gray
+$freq = Ask "检查频率: 1=每小时(推荐)  2=每天一次 (默认 1)" "1"
+if ($freq -eq "2") {
+    $t = Ask "每天几点(北京时间,0-23)? (默认 9)" "9"
+    if ($t -eq "") { $t = "9" }
+    if ($t -notmatch "^\d{1,2}$" -or [int]$t -gt 23) { Die "小时格式不对" }
+    $utcH = ([int]$t - 8 + 24) % 24
+    # 分钟取 23 而非 30/0：同样是躲开整点拥堵
+    $cron = "23 $utcH * * *"
+    $scheduleDesc = "每天北京时间 ${t}:23"
+    $scheduleNote = "每天 ${t}:23 北京时间"
+} else {
+    $cron = "7 * * * *"
+    $scheduleDesc = "每小时（UTC 的第 7 分钟）"
+    $scheduleNote = "每小时（UTC 第 7 分钟，避开整点拥堵）"
+}
+Write-Host "  cron = $cron (UTC) → $scheduleDesc"
+
+# ── 同步 renew.yml 的云账号 env 块 ───────────────────────────
+# 为什么必须做：GitHub Actions 不支持通配符 Secrets——**没在 env 段里声明的编号
+# 变量，程序根本读不到**。向导往仓库写了 SANFENGYUN_USERNAME_7，而 renew.yml 里
+# 没有对应行，第 7 台就会静默不续期（日志里连一条都没有）。这正是"改了程序没改
+# 脚本"最容易踩的坑，所以由向导自己保证两边一致。
+#
+# 至少生成 6 个槽位：日后手动加台时直接改对应 Secret 名即可，不必再动 yml。
+$script:MinCloudSlots = 6
+
+function New-CloudEnvBlock($sfCount, $abCount) {
+    $slots = [Math]::Max($script:MinCloudSlots, [Math]::Max($sfCount, $abCount))
+    $lines = @()
+    $lines += '      # >>> CLOUD_ACCOUNTS_BEGIN (由 install.ps1 自动维护，也可手动编辑) >>>'
+    foreach ($entry in @(@("SANFENGYUN", $sfCount), @("ABEIYUN", $abCount))) {
+        $key = $entry[0]
+        for ($i = 1; $i -le $slots; $i++) {
+            $suffix = ''
+            if ($i -gt 1) { $suffix = '_' + $i }
+            # 单引号拼串：`${{ ... }}` 在双引号里会被 PowerShell 当成变量解析
+            $lines += '      ' + $key + '_USERNAME' + $suffix + ': ${{ secrets.' + $key + '_USERNAME' + $suffix + ' }}'
+            $lines += '      ' + $key + '_PASSWORD' + $suffix + ': ${{ secrets.' + $key + '_PASSWORD' + $suffix + ' }}'
+            $lines += '      ' + $key + '_LABEL' + $suffix + ': ${{ vars.' + $key + '_LABEL' + $suffix + ' }}'
+            $lines += '      ' + $key + '_ENABLED' + $suffix + ': ${{ vars.' + $key + '_ENABLED' + $suffix + ' }}'
+            # 端点覆盖：厂商 WAF 拉黑 Actions 出口 IP 时指向自建中继（默认留空 = 用官方端点）
+            $lines += '      ' + $key + '_LOGIN_URL' + $suffix + ': ${{ vars.' + $key + '_LOGIN_URL' + $suffix + ' }}'
+            $lines += '      ' + $key + '_RENEW_URL' + $suffix + ': ${{ vars.' + $key + '_RENEW_URL' + $suffix + ' }}'
+        }
+    }
+    $lines += '      # <<< CLOUD_ACCOUNTS_END <<<'
+    return ($lines -join "`n")
+}
+
+# 用标记定位替换（不做正则，块内容里全是 ${{ }} 之类的正则元字符）。
+# 找不到标记返回 $null，由调用方警告——那是旧版 renew.yml，不能瞎猜结构。
+function Update-CloudEnvBlock($yaml, $sfCount, $abCount) {
+    $begin = '# >>> CLOUD_ACCOUNTS_BEGIN'
+    $end = '# <<< CLOUD_ACCOUNTS_END <<<'
+    $i = $yaml.IndexOf($begin)
+    $j = $yaml.IndexOf($end)
+    if ($i -lt 0 -or $j -le $i) { return $null }
+    # 必须从**行首**开始替换：标记前的 6 个缩进空格属于这一行，若不纳入替换范围，
+    # 新块自带的缩进就会叠加上去——重跑一次向导 BEGIN 行多 6 个空格，
+    # 跑几次 YAML 缩进就废了。这是幂等性的前提。
+    $lineStart = $yaml.LastIndexOf("`n", [Math]::Max(0, $i - 1)) + 1
+    # 行尾也必须跟随原文件：生成器默认用 LF，而 Windows 上 clone 出来的 yml 是 CRLF。
+    # 混用会让"内容其实没变"的比较判定为有变——每重跑一次向导就 commit 一次空改动，
+    # 提交历史被垃圾填满，真正的变更淹没在里面。
+    $eol = "`n"
+    if ($yaml.Contains("`r`n")) { $eol = "`r`n" }
+    $block = (New-CloudEnvBlock $sfCount $abCount)
+    $block = ($block -replace "`r`n", "`n") -replace "`n", $eol
+    return $yaml.Substring(0, $lineStart) + $block + $yaml.Substring($j + $end.Length)
+}
 
 Write-Host ""
 Write-Host "──────── 部署摘要 ────────" -ForegroundColor Cyan
@@ -395,28 +464,48 @@ Write-Host "合计:     $($sfAccounts.Count + $abAccounts.Count) 台服务器将
 Write-Host "LLM:      $llmModel @ $llmBase"
 Write-Host "发文平台: $chosenPlatform（Cookie 已入 Secrets）"
 Write-Host "通知:     $notifyStatus"
-Write-Host "定时:     每天 ${t}:30 北京时间"
+Write-Host "定时:     $scheduleNote"
 Write-Host ""
-Write-Host "注意：上面除 cron 外的配置【已实际写入】仓库 Secrets/Variables；" -ForegroundColor DarkGray
-Write-Host "      这里的确认只控制后续三个动作——改 cron、启用定时、触发首跑。" -ForegroundColor DarkGray
+Write-Host "注意：上面除 cron 与账号 env 块外的配置【已实际写入】仓库 Secrets/Variables；" -ForegroundColor DarkGray
+Write-Host "      这里的确认只控制后续三个动作——改 renew.yml、启用定时、触发首跑。" -ForegroundColor DarkGray
 $ans = Ask "继续完成部署? (Y/n)" "Y"
 if ($ans -match "^[nN]") { Die "已停止。注意：此前写入的 Secrets/Variables 仍在仓库，可用 uninstall.ps1 -Execute 清理。" }
 
-# 改 cron（与默认不同才需要提交）。用 WriteAllText 避免 WinPS5.1 的 UTF8 BOM 污染 yaml。
+# 改 cron + 同步账号 env 块（任一有变化就一起 commit/push）。
+# 用 WriteAllText 避免 WinPS5.1 的 UTF8 BOM 污染 yaml。
 $wfPath = Join-Path (Get-Location) ".github\workflows\renew.yml"
-if (Test-Path $wfPath) {
+if (-not (Test-Path $wfPath)) {
+    Warn "找不到 .github\workflows\renew.yml（请在完整仓库目录内运行向导）"
+    Warn "账号 env 块无法自动同步——请手动确认 env 段里每台服务器都有对应的 _N 行，否则多出来的台数程序读不到"
+} else {
     $yaml = Get-Content $wfPath -Raw
-    if ($yaml -match '- cron: "([^"]+)"' -and $Matches[1] -ne $cron) {
-        $newYaml = $yaml -replace '- cron: "[^"]*"', "- cron: `"$cron`""
-        Guard "改 cron 并 commit/push renew.yml" {
+    $newYaml = $yaml
+    $wfChanges = @()
+
+    if ($newYaml -match '- cron: "([^"]+)"' -and $Matches[1] -ne $cron) {
+        $newYaml = $newYaml -replace '- cron: "[^"]*"', ('- cron: "' + $cron + '"')
+        $wfChanges += "cron → $cron"
+    }
+
+    $withBlock = Update-CloudEnvBlock $newYaml $sfAccounts.Count $abAccounts.Count
+    if ($null -eq $withBlock) {
+        Warn "renew.yml 里没有 CLOUD_ACCOUNTS_BEGIN/END 标记——无法自动同步账号 env 块"
+        Warn "这是旧版 renew.yml：请手动确认 env 段覆盖了你配置的每一台（缺行 = 那台静默不续期）"
+    } elseif ($withBlock -ne $newYaml) {
+        $newYaml = $withBlock
+        $wfChanges += "账号 env 块 → 三丰云 $($sfAccounts.Count) 台 / 阿贝云 $($abAccounts.Count) 台"
+    }
+
+    if ($wfChanges.Count -eq 0) {
+        Ok "renew.yml 无需改动（cron 与账号 env 块都已是最新）"
+    } else {
+        Guard ("改 renew.yml 并 commit/push：" + ($wfChanges -join "；")) {
             [System.IO.File]::WriteAllText($wfPath, $newYaml, (New-Object System.Text.UTF8Encoding($false)))
             git add .github/workflows/renew.yml
-            git commit -m "chore: schedule = ${t}:30 CST" | Out-Null
+            git commit -m ("chore: 同步 renew.yml（" + ($wfChanges -join "；") + "）") | Out-Null
             git push 2>&1 | Out-Null
         }
-        Ok "定时拟改为每天 ${t}:30 北京时间（GitHub cron 实际触发可能延迟数分钟，属正常）"
-    } else {
-        Ok "定时保持现有 cron（${t}:30 北京时间无需改动）"
+        Ok ("renew.yml 已更新：" + ($wfChanges -join "；"))
     }
 }
 
