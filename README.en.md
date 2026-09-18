@@ -15,9 +15,25 @@ Requires [Git](https://git-scm.com/) + [GitHub CLI](https://cli.github.com/) (`g
 irm https://raw.githubusercontent.com/yangshu114514/free-renew/main/install.ps1 | iex
 ```
 
-The wizard runs 6 steps: repo → cloud account passwords → LLM API (optional test) → **choose publish platform (CSDN/Zhihu) and capture its cookie** → notification method → daily schedule (default 09:30 CST) + confirm. About 5 minutes. Preview safely first with `.\install.ps1 -DryRun` (writes nothing).
+The wizard runs 6 steps: repo → cloud account passwords (**any number of servers per vendor**) → LLM API (optional test) → **choose publish platform (CSDN/Zhihu) and capture its cookie** → notification method → daily schedule (default 09:30 CST) + confirm. About 5 minutes. Preview safely first with `.\install.ps1 -DryRun` (writes nothing).
 
 Linux/macOS or manual route: clone the repo and follow [docs/SETUP.md](docs/SETUP.md).
+
+## Multiple servers: as many as you like
+
+Each vendor supports any number of accounts (e.g. **2 Sanfengyun + 3 Abeiyun**); the program renews them one by one:
+
+- **At install time**: the wizard asks for each server of a vendor in turn (blank line ends that vendor).
+- **Adding/removing later**:
+  - **Add** → re-run the wizard, or add a `SANFENGYUN_USERNAME_2` / `SANFENGYUN_PASSWORD_2` Secret pair (the 1st server keeps the unsuffixed names, so **existing deployments need no migration**), then add the matching `_N` lines to the `env:` block of `.github/workflows/renew.yml` (pre-wired up to `_6`).
+  - **Remove** → re-running the wizard **auto-deletes** the now-unused numbered Secrets; if you delete them by hand, don't leave them behind — the program would keep reading them.
+  - **Temporarily disable one** → set Variable `SANFENGYUN_ENABLED_2=false` (credentials stay).
+  - **Give one a name** → set Variable `SANFENGYUN_LABEL_2=backup`; notifications then read "三丰云(backup)".
+- **One article per server**: the article is the evidence behind *that* machine's renewal request; sharing one URL across several accounts looks like repeated applications to a human reviewer. Cost: 5 servers = up to 5 LLM generations + 5 publishes + 5 screenshots per run.
+- **Serial, never concurrent**: concurrent runs would log into the same vendor and post to the same content platform simultaneously, raising risk-control and rate-limit exposure. Worst case ≈25 min per server; the job timeout defaults to 180 min. For more servers, set Variable `RUN_TIMEOUT_MINUTES = servers × 25 + 30`.
+- **Scheduled runs queue instead of overlapping** (`concurrency`), so two runs never touch the same accounts at once.
+
+> ⚠️ **Publishing quota is a real constraint**: a new CSDN account allows about 2 posts/day. With 3+ servers due on the same day, CSDN may not be enough — `PLATFORM_FALLBACK` automatically switches to the other platform, or stagger the renewal windows.
 
 ## Publish platform: CSDN / Zhihu (both supported, with automatic fallback)
 
@@ -55,7 +71,7 @@ The dedicated browser profile usually keeps you logged in — the script re-expo
 | [docs/protocol/](docs/protocol/) | technical details: Sanfengyun/Abeiyun `cmd=` protocol, CSDN signing, Zhihu publish API (verified samples) |
 | [NOTICE](NOTICE) | third-party attribution |
 
-Architecture in one sentence: **GitHub Actions runs this repo's Rust binary daily** — vendor API login + status check (exits in seconds when not due); when due, an LLM writes a unique-angle experience article (machine-validated against banned words / required keywords / AI-tone heuristics / content-safety red-lines), publishes it to the chosen content platform (CSDN or Zhihu), screenshots the page, and submits to the vendor's review queue. Scheduled workflows get disabled by GitHub after 60 days of repo inactivity — [keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow) is built in to prevent that.
+Architecture in one sentence: **GitHub Actions runs this repo's Rust binary on a schedule** — logs into each configured vendor account in turn, checks the renewal window (exits in seconds when nothing is due); when due, an LLM writes a unique-angle experience article (machine-validated against banned words / required keywords / AI-tone heuristics / content-safety red-lines), publishes it to the chosen content platform (CSDN or Zhihu), screenshots the page, and submits to the vendor's review queue. Scheduled workflows get disabled by GitHub after 60 days of repo inactivity — a self-contained keepalive job in `renew.yml` prevents that.
 
 ## Acknowledgments
 
@@ -65,7 +81,7 @@ The protocol layer stands on **[BookerLiu/FreeServer](https://github.com/BookerL
 Other direct credits (full list in NOTICE):
 
 - **[rust-headless-chrome](https://github.com/rust-headless-chrome/rust-headless-chrome)** (MIT) - CDP client; the screenshot anti-detection capability (webdriver/chrome/plugins/permissions/webgl bypass) comes from its built-in enable_stealth_mode().
-- **[gautamkrishnar/keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow)** (MIT) - prevents GitHub's 60-day auto-disable of scheduled workflows.
+- ~~[gautamkrishnar/keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow)~~ (MIT) - formerly used to prevent GitHub's 60-day auto-disable of scheduled workflows; the action was blocked by GitHub for ToS reasons in 2025-04, so this project now ships a self-contained keepalive job in `renew.yml`. Kept here as a historical note.
 - CSDN x-ca signing constants: public constants embedded in CSDN's own frontend JS, as documented in community articles.
 - Zhihu publish flow: modeled on community HTTP implementations such as [zimya/zhihu_obsidian](https://github.com/zimya/zhihu_obsidian) (0BSD) — the create-draft → PATCH-content → attach-topic → publish endpoints, which need no x-zse-96 signing. Independent Rust implementation, no code copied (see NOTICE).
 - Sanfengyun official help documents (content_1009 / content_1156) - source of the review red lines.

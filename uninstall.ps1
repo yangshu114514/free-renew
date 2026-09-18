@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   free-renew 卸载：清理写入 GitHub 的 Secrets / Variables 与本地浏览器 Cookie profile。
@@ -9,8 +9,9 @@
   要删去 GitHub 网页手动删）。
 
   清理范围：
-  - GitHub Secrets：SANFENGYUN_*、ABEIYUN_*、LLM_*、CSDN_COOKIES、ZHIHU_COOKIES、NOTIFY_*
-  - GitHub Variables：PLATFORM_PROVIDER、PLATFORM_FALLBACK、ZHIHU_TOPICS
+  - GitHub Secrets：SANFENGYUN_*、ABEIYUN_*（含 _2/_3 等编号账号）、LLM_*、
+    CSDN_COOKIES、ZHIHU_COOKIES、NOTIFY_*
+  - GitHub Variables：PLATFORM_PROVIDER、PLATFORM_FALLBACK、ZHIHU_TOPICS 与编号账号的备注名
   - 本地：专用 cookie profile 目录 + %TEMP% 里的 *_cookies_oneline.txt
 
   保留（不碰）：本仓库代码、你的 GitHub Actions 定时任务记录、厂商/内容平台的真实账号。
@@ -46,6 +47,10 @@ $SECRETS = @(
     "NOTIFY_WEBHOOK_URL"
 )
 $VARS = @("PLATFORM_PROVIDER","PLATFORM_FALLBACK","ZHIHU_TOPICS")
+
+# 多账号的编号变量（SANFENGYUN_USERNAME_2 / ABEIYUN_PASSWORD_3 / ABEIYUN_LABEL_2 …）
+# 是按"配了几台"动态写入的，写死在上面的列表里清不干净，必须按模式扫。
+$CLOUD_SLOT_PATTERN = '^(SANFENGYUN|ABEIYUN)_(USERNAME|PASSWORD|ENABLED|LABEL|LOGIN_URL|RENEW_URL)_\d+$'
 
 # 只有显式 -Execute 才真删；否则一律演练。
 $doDelete = $Execute.IsPresent -and -not $DryRun.IsPresent
@@ -88,13 +93,33 @@ function Remove-GhVar($name) {
     if ($LASTEXITCODE -eq 0) { Ok "删除 Variable $name" } else { Info "  （Variable $name 不存在或已删）" }
 }
 
+# 列出仓库里匹配 $pattern 的名字（secret / variable 通用）。
+# 探测失败（未登录/网络）返回空数组，不影响固定列表的清理。
+function Get-GhNames($kind, $pattern) {
+    $out = @()
+    try {
+        $raw = gh $kind list @repoArg 2>$null
+        foreach ($line in @($raw)) {
+            $name = ("$line" -split '\s+')[0]
+            if ($name -and $name -match $pattern) { $out += $name }
+        }
+    } catch { }
+    return ,$out
+}
+
 # ── GitHub Secrets ────────────────────────────────────────────
 Step "GitHub Secrets"
 foreach ($s in $SECRETS) { Remove-GhSecret $s }
+foreach ($s in (Get-GhNames "secret" $CLOUD_SLOT_PATTERN)) {
+    if ($SECRETS -notcontains $s) { Remove-GhSecret $s }
+}
 
 # ── GitHub Variables ──────────────────────────────────────────
 Step "GitHub Variables"
 foreach ($v in $VARS) { Remove-GhVar $v }
+foreach ($v in (Get-GhNames "variable" $CLOUD_SLOT_PATTERN)) {
+    if ($VARS -notcontains $v) { Remove-GhVar $v }
+}
 
 # ── 本地 cookie profile / 文件 ────────────────────────────────
 Step "本地浏览器 profile 与 Cookie 文件"

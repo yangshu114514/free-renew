@@ -15,9 +15,25 @@
 irm https://raw.githubusercontent.com/yangshu114514/free-renew/main/install.ps1 | iex
 ```
 
-向导分 6 步问答：仓库 → 云账号密码 → LLM API（可选测试）→ **选发文平台（CSDN/知乎）并采集其 Cookie** → 通知方式 → 每天几点跑 + 确认。全程约 5 分钟。想先安全预览可跑 `.\install.ps1 -DryRun`（不写任何东西）。
+向导分 6 步问答：仓库 → 云账号密码（**同一家可逐台录入多台**）→ LLM API（可选测试）→ **选发文平台（CSDN/知乎）并采集其 Cookie** → 通知方式 → 每天几点跑 + 确认。全程约 5 分钟。想先安全预览可跑 `.\install.ps1 -DryRun`（不写任何东西）。
 
 Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.md) 手动走一遍（内容相同，含两个发文平台的采集方式、可选的 OpenClaw 微信通知接线、故障速查表）。
+
+## 多台服务器：想配几台配几台
+
+同一家可配任意多台（比如你举的 **2 台三丰云 + 3 台阿贝云**），程序逐台检查、逐台续期：
+
+- **装的时候**：向导里同一家云逐台录账号即可（回车结束该厂商），想加几台加几台。
+- **日后增删**：
+  - **加一台** → 重跑向导；或手动加一对 Secret `SANFENGYUN_USERNAME_2` / `SANFENGYUN_PASSWORD_2`（第 1 台是无后缀的 `SANFENGYUN_USERNAME`，**旧部署一行都不用改**），并在 `.github/workflows/renew.yml` 的 `env:` 段补一对 `_N` 行（已预置到 `_6`）。
+  - **减一台** → 重跑向导会**自动清掉**多余的编号 Secret；手删的话记得一并删掉，否则程序仍会读到它。
+  - **临时停用一台** → 加仓库 Variable `SANFENGYUN_ENABLED_2=false`，凭据留着随时改回来。
+  - **起个名字好认** → 加仓库 Variable `SANFENGYUN_LABEL_2=备用机`，通知里就显示「三丰云(备用机)」。
+- **每台各自一篇文章**：提交给厂商的是"这台机器的续期申请所依据的文章"，多台共用一篇等于同一个 URL 反复申请。代价是 5 台 = 每轮最多 5 篇 LLM 生成 + 5 次发文 + 5 次截图。
+- **串行执行、不并发**：账号一个接一个跑（并发会同时登录同一厂商、同时向同一内容平台发文，风控与限流风险明显上升）。单台最坏 ≈25 分钟，job 超时默认 180 分钟；更多台就加 Variable `RUN_TIMEOUT_MINUTES = 账号数 × 25 + 30`。
+- **定时任务自动排队**（`concurrency`），绝不会两轮重叠同时操作同一批账号。
+
+> ⚠️ **发文额度是真实的硬约束**：CSDN 新号约 2 篇/天。同一天有 3 台以上到期时 CSDN 可能不够用——靠 `PLATFORM_FALLBACK` 自动切另一家平台兜底，或让各台的到期日错开。
 
 ## 发文平台：CSDN / 知乎（可两家都连，自动兜底）
 
@@ -60,7 +76,7 @@ Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.m
 | [config.example.toml](config.example.toml) | 全部配置项及注释（LLM 词表/角度池/禁词均可自定义） |
 | [NOTICE](NOTICE) | 第三方归属声明 |
 
-架构一句话：**GitHub Actions 每天跑一次本仓库的 Rust 二进制**——登录云厂商查状态，没到期几秒退出；到期则 LLM 生成一篇随机角度、经禁词/必含词/AI 腔/**内容审核红线**机器校验的体验文章，发布到所选内容平台（CSDN 或知乎），截图后提交给厂商审核，成功或失败都会通过已配置的通知渠道告警（OpenClaw→微信 / 通用 Webhook，可选）。60 天仓库无提交会导致定时任务被 GitHub 停用，已内置 [keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow) 自动保活。
+架构一句话：**GitHub Actions 按定时计划跑一次本仓库的 Rust 二进制**——逐台登录云厂商查状态，没到期几秒退出；到期则 LLM 生成一篇随机角度、经禁词/必含词/AI 腔/**内容审核红线**机器校验的体验文章，发布到所选内容平台（CSDN 或知乎），截图后提交给厂商审核，成功或失败都会通过已配置的通知渠道告警（OpenClaw→微信 / 通用 Webhook，可选）。60 天仓库无提交会导致定时任务被 GitHub 停用，已内置自建 keepalive job 自动保活。
 
 ## 致谢
 
@@ -69,7 +85,7 @@ Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.m
 其他直接引用与致谢（完整清单见 [NOTICE](NOTICE)）：
 
 - **[rust-headless-chrome](https://github.com/rust-headless-chrome/rust-headless-chrome)**（MIT）——Chrome DevTools Protocol 客户端。文章页截图的反检测能力（webdriver/chrome/plugins/permissions/webgl 五件套）来自其内置 `enable_stealth_mode()`。
-- **[gautamkrishnar/keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow)**（MIT）——防止 GitHub 60 天无活动自动停用定时任务。
+- ~~[gautamkrishnar/keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow)~~——原先用它防止 GitHub 60 天无活动自动停用定时任务；该 action 已于 2025-04 被 GitHub 按 ToS 封禁（仓库不存在，job 在 Set up job 就报 "Repository access blocked"），本项目改为 renew.yml 里的自建零依赖 keepalive job。此处保留记录以解释历史。
 - **CSDN 签名常量**（x-ca-key / appSecret）出自 CSDN 前端 JS 内嵌的公开常量，社区解析见[腾讯云社区文章](https://cloud.tencent.com/developer/article/2420128)。
 - **知乎发文流程**参考 [zimya/zhihu_obsidian](https://github.com/zimya/zhihu_obsidian)（0BSD）等社区实现的纯 HTTP 链路（建草稿→写正文→挂话题→发布，无需 x-zse-96 签名）；本项目独立用 Rust 实现，未复制源码，详见 [NOTICE](NOTICE)。
 - **三丰云官方帮助文档**（content_1009 / content_1156）——审核红线条目的出处。

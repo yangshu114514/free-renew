@@ -32,9 +32,8 @@ fn main() -> Result<()> {
             opts.path = Some(std::path::PathBuf::from(p));
         }
     }
-    let browser = headless_chrome::Browser::new(opts).context(
-        "启动 Chrome 失败：装 Chrome，或设环境变量 CHROME_PATH 指向 msedge.exe 也可",
-    )?;
+    let browser = headless_chrome::Browser::new(opts)
+        .context("启动 Chrome 失败：装 Chrome，或设环境变量 CHROME_PATH 指向 msedge.exe 也可")?;
 
     let tab = browser.new_tab().context("开标签页失败")?;
     tab.navigate_to("https://www.csdn.net/")
@@ -51,7 +50,10 @@ fn main() -> Result<()> {
             Ok(c) => c,
             Err(e) => bail!("浏览器窗口已关闭或失联（{e}），采集终止"),
         };
-        if cookies.iter().any(|c| c.name == "UserToken" || c.name == "UserName") {
+        if cookies
+            .iter()
+            .any(|c| c.name == "UserToken" || c.name == "UserName")
+        {
             println!("[采集器] 第 {round} 轮检测到登录态！");
             break;
         }
@@ -98,12 +100,19 @@ fn main() -> Result<()> {
     let one = std::path::Path::new(&out_dir).join("csdn_cookies_oneline.txt");
     std::fs::write(&one, kv_pairs.join("; ")).context("写入单行版失败")?;
 
-    println!("\n[采集器] ✅ 共导出 {} 条 Cookie → {}", cookies.len(), out.display());
+    println!(
+        "\n[采集器] ✅ 共导出 {} 条 Cookie → {}",
+        cookies.len(),
+        out.display()
+    );
     println!("[采集器] 单行 Secret 版 → {}", one.display());
     println!("[采集器] 关键 Cookie 检查：");
     for key in ["UserName", "UserToken", "UN", "p_uid"] {
         match cookies.iter().find(|c| c.name == key) {
-            Some(c) => println!("  ✅ {key} = {}…", c.value.chars().take(10).collect::<String>()),
+            Some(c) => println!(
+                "  ✅ {key} = {}…",
+                c.value.chars().take(10).collect::<String>()
+            ),
             None => println!("  ❌ {key} 缺失（可能影响发文接口）"),
         }
     }

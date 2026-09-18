@@ -17,7 +17,7 @@ on:
         required: false
         default: ""
       test_zhihu:
-        description: "可选：填厂商名(三丰云/阿贝云)只探知乎发文链路(建草稿不发布)；留空走正常续期"
+        description: "可选：填账号ID/厂商名只探知乎发文链路(建草稿不发布)；留空走正常续期"
         required: false
         default: ""
       test_platforms:
@@ -25,7 +25,7 @@ on:
         required: false
         default: ""
       test_write:
-        description: "可选：填厂商名只生成文章样文输出到日志（不发文不碰知乎），验内容质量用"
+        description: "可选：填账号ID/厂商名只生成文章样文输出到日志（不发文不碰平台），验内容质量用"
         required: false
         default: ""
       submit_existing:
@@ -33,9 +33,9 @@ on:
         required: false
         default: ""
       submit_vendor:
-        description: "submit_existing 对应厂商（三丰云/阿贝云），默认三丰云"
+        description: "submit_existing 对应账号：填账号 ID（如 sanfengyun-2）或唯一的厂商名/label"
         required: false
-        default: "三丰云"
+        default: "sanfengyun-1"
       submit_title:
         description: "submit_existing 文章标题关键词（截图校验用，可留空）"
         required: false
@@ -51,6 +51,14 @@ on:
 # 顶层权限收紧为 read；keepalive job 内部单独提权 write
 permissions:
   contents: read
+
+# 串行排队，绝不并行：
+# 定时任务每小时触发，而多台服务器同时到期时单轮可能跑很久。没有并发组的话，
+# 下一轮会和上一轮重叠——两个进程同时登录同一厂商、同时向同一内容平台发文，
+# 既可能重复投稿，也更容易撞风控。排队最多晚一轮，重叠的代价大得多。
+concurrency:
+  group: free-renew
+  cancel-in-progress: false
 
 jobs:
   keepalive:
@@ -82,18 +90,56 @@ jobs:
 
   renew:
     runs-on: ubuntu-latest
-    # 最坏预算（两家同日都要续）：登录 5 轮重试×双端点 ≈4min/家，LLM 3 轮重试
-    # ≈6min/家，发文+截图轮询等公开 12min/家，提交 5 轮重试 ≈5min/家。
-    # 合计 ≈50+min——原先 45 会在第二家"已发文未提交"的半截处被杀。抬到 75。
-    timeout-minutes: 75
+    # 超时预算：账号之间**串行**执行，单台最坏 ≈25min（登录 5 轮重试 ≈4min、
+    # LLM 3 轮重试 ≈6min、发文+等公开 ≈12min、提交 5 轮重试 ≈5min，均为全打满）。
+    # 默认 180min 够 ≈7 台的最坏情况；账号更多时加仓库 Variable RUN_TIMEOUT_MINUTES
+    # 覆盖（公式：账号数 × 25 + 30min 余量，GitHub 单 job 硬上限 360）。
+    timeout-minutes: ${{ fromJSON(vars.RUN_TIMEOUT_MINUTES || '180') }}
     permissions:
       contents: read
     env:
       # job 级 env：preflight 诊断与 renew 共用同一套 Secrets
+      #
+      # ── 多账号 ────────────────────────────────────────────────────────
+      # 第 1 台用无后缀变量（与旧部署完全一致），第 2 台起用 _N 后缀；
+      # 程序按序号逐台续期，事件与截图产物按账号 ID（sanfengyun-1/-2…）区分。
+      # 想再加几台，照抄一对 _N 行并改后缀即可（未定义的 Secret 展开为空串，
+      # 程序会跳过空槽位，不会报错）。
+      #   临时停用某一台：给对应编号加 SANFENGYUN_ENABLED_N=false（Variable）。
       SANFENGYUN_USERNAME: ${{ secrets.SANFENGYUN_USERNAME }}
       SANFENGYUN_PASSWORD: ${{ secrets.SANFENGYUN_PASSWORD }}
+      SANFENGYUN_LABEL: ${{ vars.SANFENGYUN_LABEL }}
+      SANFENGYUN_USERNAME_2: ${{ secrets.SANFENGYUN_USERNAME_2 }}
+      SANFENGYUN_PASSWORD_2: ${{ secrets.SANFENGYUN_PASSWORD_2 }}
+      SANFENGYUN_LABEL_2: ${{ vars.SANFENGYUN_LABEL_2 }}
+      SANFENGYUN_ENABLED_2: ${{ vars.SANFENGYUN_ENABLED_2 }}
+      SANFENGYUN_USERNAME_3: ${{ secrets.SANFENGYUN_USERNAME_3 }}
+      SANFENGYUN_PASSWORD_3: ${{ secrets.SANFENGYUN_PASSWORD_3 }}
+      SANFENGYUN_LABEL_3: ${{ vars.SANFENGYUN_LABEL_3 }}
+      SANFENGYUN_ENABLED_3: ${{ vars.SANFENGYUN_ENABLED_3 }}
+      SANFENGYUN_USERNAME_4: ${{ secrets.SANFENGYUN_USERNAME_4 }}
+      SANFENGYUN_PASSWORD_4: ${{ secrets.SANFENGYUN_PASSWORD_4 }}
+      SANFENGYUN_USERNAME_5: ${{ secrets.SANFENGYUN_USERNAME_5 }}
+      SANFENGYUN_PASSWORD_5: ${{ secrets.SANFENGYUN_PASSWORD_5 }}
+      SANFENGYUN_USERNAME_6: ${{ secrets.SANFENGYUN_USERNAME_6 }}
+      SANFENGYUN_PASSWORD_6: ${{ secrets.SANFENGYUN_PASSWORD_6 }}
       ABEIYUN_USERNAME: ${{ secrets.ABEIYUN_USERNAME }}
       ABEIYUN_PASSWORD: ${{ secrets.ABEIYUN_PASSWORD }}
+      ABEIYUN_LABEL: ${{ vars.ABEIYUN_LABEL }}
+      ABEIYUN_USERNAME_2: ${{ secrets.ABEIYUN_USERNAME_2 }}
+      ABEIYUN_PASSWORD_2: ${{ secrets.ABEIYUN_PASSWORD_2 }}
+      ABEIYUN_LABEL_2: ${{ vars.ABEIYUN_LABEL_2 }}
+      ABEIYUN_ENABLED_2: ${{ vars.ABEIYUN_ENABLED_2 }}
+      ABEIYUN_USERNAME_3: ${{ secrets.ABEIYUN_USERNAME_3 }}
+      ABEIYUN_PASSWORD_3: ${{ secrets.ABEIYUN_PASSWORD_3 }}
+      ABEIYUN_LABEL_3: ${{ vars.ABEIYUN_LABEL_3 }}
+      ABEIYUN_ENABLED_3: ${{ vars.ABEIYUN_ENABLED_3 }}
+      ABEIYUN_USERNAME_4: ${{ secrets.ABEIYUN_USERNAME_4 }}
+      ABEIYUN_PASSWORD_4: ${{ secrets.ABEIYUN_PASSWORD_4 }}
+      ABEIYUN_USERNAME_5: ${{ secrets.ABEIYUN_USERNAME_5 }}
+      ABEIYUN_PASSWORD_5: ${{ secrets.ABEIYUN_PASSWORD_5 }}
+      ABEIYUN_USERNAME_6: ${{ secrets.ABEIYUN_USERNAME_6 }}
+      ABEIYUN_PASSWORD_6: ${{ secrets.ABEIYUN_PASSWORD_6 }}
       LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
       LLM_MODEL: ${{ secrets.LLM_MODEL }}
@@ -108,6 +154,8 @@ jobs:
       NOTIFY_OPENCLAW_URL: ${{ secrets.NOTIFY_OPENCLAW_URL }}
       NOTIFY_OPENCLAW_USER: ${{ secrets.NOTIFY_OPENCLAW_USER }}
       NOTIFY_OPENCLAW_PASSWORD: ${{ secrets.NOTIFY_OPENCLAW_PASSWORD }}
+      # 通知标签（可选，webhook 后端用；留空用内置默认 renewal）
+      NOTIFY_TAG: ${{ vars.NOTIFY_TAG }}
       CHROME_PATH: /usr/bin/google-chrome
       FREE_RENEW_DEBUG_DIR: /tmp/freerenew-debug
       FREE_RENEW_LOG_DIR: /tmp/freerenew-logs

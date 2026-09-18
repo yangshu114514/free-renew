@@ -30,16 +30,19 @@ pub struct CsdnClient {
 
 impl CsdnClient {
     /// cookie 形如 "k=v; k=v; ..."（csdn_cookies_oneline.txt 原样内容）
-    pub fn new(cookie: &str, app_secret: &str, x_ca_key: &str) -> Self {
-        Self {
+    ///
+    /// 返回 Result 而不是 `expect`：客户端构建虽极少失败，但一旦 TLS 后端初始化
+    /// 异常，panic + `panic = "abort"` 会让 Actions 里只剩一段无错误链的崩溃。
+    pub fn new(cookie: &str, app_secret: &str, x_ca_key: &str) -> Result<Self> {
+        Ok(Self {
             cookie: cookie.trim().to_string(),
             app_secret: app_secret.to_string(),
             x_ca_key: x_ca_key.to_string(),
             http: reqwest::blocking::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
-                .expect("reqwest 静态参数"),
-        }
+                .context("构建 CSDN HTTP 客户端失败")?,
+        })
     }
 
     /// x-ca-signature：HMAC-SHA256(appSecret, 待签串) 的 Base64
@@ -48,7 +51,14 @@ impl CsdnClient {
     /// 空行、content-type 与第一个 header 之间也是空行——社区流传的 Java 版
     /// 少了 accept 后那个 \n，是错的；以 CSDN 前端 JS 为准）：
     ///   "POST\n*/*\n\napplication/json\n\nx-ca-key:203803574\nx-ca-nonce:{uuid}\n{path}"
-    fn sign(&self, method: &str, accept: &str, content_type: &str, nonce: &str, path: &str) -> String {
+    fn sign(
+        &self,
+        method: &str,
+        accept: &str,
+        content_type: &str,
+        nonce: &str,
+        path: &str,
+    ) -> String {
         let string_to_sign = format!(
             "{method}\n{accept}\n\n{content_type}\n\nx-ca-key:{}\nx-ca-nonce:{nonce}\n{path}",
             self.x_ca_key
@@ -120,10 +130,14 @@ impl CsdnClient {
                      请明日额度重置后由定时任务自动重试，或提升 CSDN 账号等级以增加每日发文数"
                 );
             }
-            bail!("CSDN HTTP {status}: {}", crate::http::truncate_chars(&body, 300));
+            bail!(
+                "CSDN HTTP {status}: {}",
+                crate::http::truncate_chars(&body, 300)
+            );
         }
 
-        let v: serde_json::Value = serde_json::from_str(&body).context("CSDN 响应 JSON 解析失败")?;
+        let v: serde_json::Value =
+            serde_json::from_str(&body).context("CSDN 响应 JSON 解析失败")?;
         if v.get("code").and_then(serde_json::Value::as_i64) != Some(200) {
             bail!("CSDN 发文被拒: {}", crate::http::truncate_chars(&body, 300));
         }
@@ -145,8 +159,15 @@ mod tests {
         // 锁定 2026-09 真请求验证过的待签串形状（双空行版）。
         // 若此测试挂了而接口报 "HMAC signature does not match"，
         // 说明 CSDN 改了签名格式，回前端 JS 重新比对。
-        let client = CsdnClient::new("k=v", DEFAULT_APP_SECRET, DEFAULT_X_CA_KEY);
-        let sig = client.sign("POST", "*/*", "application/json", "939abdaa-0bdd-4eba-a720-e8fc0b151621", "/blog-console-api/v3/mdeditor/saveArticle");
+        let client =
+            CsdnClient::new("k=v", DEFAULT_APP_SECRET, DEFAULT_X_CA_KEY).expect("客户端构建成功");
+        let sig = client.sign(
+            "POST",
+            "*/*",
+            "application/json",
+            "939abdaa-0bdd-4eba-a720-e8fc0b151621",
+            "/blog-console-api/v3/mdeditor/saveArticle",
+        );
         assert_eq!(sig.len(), 44, "HMAC-SHA256 base64 应为 44 字符: {sig}");
     }
 }
