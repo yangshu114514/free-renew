@@ -15,7 +15,7 @@ Requires [Git](https://git-scm.com/) + [GitHub CLI](https://cli.github.com/) (`g
 irm https://raw.githubusercontent.com/yangshu114514/free-renew/main/install.ps1 | iex
 ```
 
-The wizard runs 6 steps: repo → cloud account passwords (**any number of servers per vendor**) → LLM API (optional test) → **choose publish platform (CSDN/Zhihu) and capture its cookie** → notification method → daily schedule (default 09:30 CST) + confirm. About 5 minutes. Preview safely first with `.\install.ps1 -DryRun` (writes nothing).
+The wizard runs 6 steps: repo → cloud account passwords (**any number of servers per vendor**) → LLM API (optional test) → **choose publish platform (CSDN/Zhihu) and capture its cookie** → notification method → check schedule (default: hourly, offset off the top of the hour) + confirm. About 5 minutes. Preview safely first with `.\install.ps1 -DryRun` (writes nothing).
 
 Linux/macOS or manual route: clone the repo and follow [docs/SETUP.md](docs/SETUP.md).
 
