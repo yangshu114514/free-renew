@@ -2,10 +2,13 @@ name: free-server-renewal
 
 on:
   schedule:
-    # 每小时整点（UTC）跑一次。程序幂等：未到期 4 秒退出，只有续费窗口内（~5 天）才真干活。
-    # 原来每天 09:30 一班——境外 runner 抖动一次就错过当天；每小时多 24 倍机会，
-    # 大幅提高续费窗口内命中成功的概率。未到期 run 不发任何通知，不刷微信/邮件。
-    - cron: "0 * * * *" # 每小时整点（UTC）；程序内部判断是否到期，幂等
+    # 每小时第 7 分钟（UTC）跑一次。程序幂等：未到期几秒退出，只有续费窗口内（~5 天）才真干活。
+    # 未到期 run 不发任何通知，不刷微信/邮件。
+    #
+    # 为什么是 :07 而不是 :00——GitHub 官方文档明说 schedule 在高负载时会延迟或跳过，
+    # 而"高负载时段包括每个整点的开始"。实测这个仓库写成 "0 * * * *" 时，
+    # 一整天只触发了 6 次（期望 24 次），约 25% 命中率。避开整点是最便宜的改善。
+    - cron: "7 * * * *" # 每小时第 7 分钟（UTC）；程序内部判断是否到期，幂等
   workflow_dispatch: # 手动点火（Actions 页面按钮）
     inputs:
       test_screenshot_url:
@@ -103,43 +106,86 @@ jobs:
       # ── 多账号 ────────────────────────────────────────────────────────
       # 第 1 台用无后缀变量（与旧部署完全一致），第 2 台起用 _N 后缀；
       # 程序按序号逐台续期，事件与截图产物按账号 ID（sanfengyun-1/-2…）区分。
-      # 想再加几台，照抄一对 _N 行并改后缀即可（未定义的 Secret 展开为空串，
-      # 程序会跳过空槽位，不会报错）。
-      #   临时停用某一台：给对应编号加 SANFENGYUN_ENABLED_N=false（Variable）。
+      #
+      # ⚠️ GitHub Actions 不支持通配符 Secrets：**没在这里声明的编号变量，
+      #    程序根本读不到**（配了 Secret 也等于没配）。所以加台数必须同时改这里。
+      #    install.ps1 会在向导里按你实际配置的台数自动重写下面这一块；
+      #    手动加台时照抄一组四行（USERNAME/PASSWORD/LABEL/ENABLED）并改后缀。
+      #
+      # >>> CLOUD_ACCOUNTS_BEGIN (由 install.ps1 自动维护，也可手动编辑) >>>
       SANFENGYUN_USERNAME: ${{ secrets.SANFENGYUN_USERNAME }}
       SANFENGYUN_PASSWORD: ${{ secrets.SANFENGYUN_PASSWORD }}
       SANFENGYUN_LABEL: ${{ vars.SANFENGYUN_LABEL }}
+      SANFENGYUN_ENABLED: ${{ vars.SANFENGYUN_ENABLED }}
+      SANFENGYUN_LOGIN_URL: ${{ vars.SANFENGYUN_LOGIN_URL }}
+      SANFENGYUN_RENEW_URL: ${{ vars.SANFENGYUN_RENEW_URL }}
       SANFENGYUN_USERNAME_2: ${{ secrets.SANFENGYUN_USERNAME_2 }}
       SANFENGYUN_PASSWORD_2: ${{ secrets.SANFENGYUN_PASSWORD_2 }}
       SANFENGYUN_LABEL_2: ${{ vars.SANFENGYUN_LABEL_2 }}
       SANFENGYUN_ENABLED_2: ${{ vars.SANFENGYUN_ENABLED_2 }}
+      SANFENGYUN_LOGIN_URL_2: ${{ vars.SANFENGYUN_LOGIN_URL_2 }}
+      SANFENGYUN_RENEW_URL_2: ${{ vars.SANFENGYUN_RENEW_URL_2 }}
       SANFENGYUN_USERNAME_3: ${{ secrets.SANFENGYUN_USERNAME_3 }}
       SANFENGYUN_PASSWORD_3: ${{ secrets.SANFENGYUN_PASSWORD_3 }}
       SANFENGYUN_LABEL_3: ${{ vars.SANFENGYUN_LABEL_3 }}
       SANFENGYUN_ENABLED_3: ${{ vars.SANFENGYUN_ENABLED_3 }}
+      SANFENGYUN_LOGIN_URL_3: ${{ vars.SANFENGYUN_LOGIN_URL_3 }}
+      SANFENGYUN_RENEW_URL_3: ${{ vars.SANFENGYUN_RENEW_URL_3 }}
       SANFENGYUN_USERNAME_4: ${{ secrets.SANFENGYUN_USERNAME_4 }}
       SANFENGYUN_PASSWORD_4: ${{ secrets.SANFENGYUN_PASSWORD_4 }}
+      SANFENGYUN_LABEL_4: ${{ vars.SANFENGYUN_LABEL_4 }}
+      SANFENGYUN_ENABLED_4: ${{ vars.SANFENGYUN_ENABLED_4 }}
+      SANFENGYUN_LOGIN_URL_4: ${{ vars.SANFENGYUN_LOGIN_URL_4 }}
+      SANFENGYUN_RENEW_URL_4: ${{ vars.SANFENGYUN_RENEW_URL_4 }}
       SANFENGYUN_USERNAME_5: ${{ secrets.SANFENGYUN_USERNAME_5 }}
       SANFENGYUN_PASSWORD_5: ${{ secrets.SANFENGYUN_PASSWORD_5 }}
+      SANFENGYUN_LABEL_5: ${{ vars.SANFENGYUN_LABEL_5 }}
+      SANFENGYUN_ENABLED_5: ${{ vars.SANFENGYUN_ENABLED_5 }}
+      SANFENGYUN_LOGIN_URL_5: ${{ vars.SANFENGYUN_LOGIN_URL_5 }}
+      SANFENGYUN_RENEW_URL_5: ${{ vars.SANFENGYUN_RENEW_URL_5 }}
       SANFENGYUN_USERNAME_6: ${{ secrets.SANFENGYUN_USERNAME_6 }}
       SANFENGYUN_PASSWORD_6: ${{ secrets.SANFENGYUN_PASSWORD_6 }}
+      SANFENGYUN_LABEL_6: ${{ vars.SANFENGYUN_LABEL_6 }}
+      SANFENGYUN_ENABLED_6: ${{ vars.SANFENGYUN_ENABLED_6 }}
+      SANFENGYUN_LOGIN_URL_6: ${{ vars.SANFENGYUN_LOGIN_URL_6 }}
+      SANFENGYUN_RENEW_URL_6: ${{ vars.SANFENGYUN_RENEW_URL_6 }}
       ABEIYUN_USERNAME: ${{ secrets.ABEIYUN_USERNAME }}
       ABEIYUN_PASSWORD: ${{ secrets.ABEIYUN_PASSWORD }}
       ABEIYUN_LABEL: ${{ vars.ABEIYUN_LABEL }}
+      ABEIYUN_ENABLED: ${{ vars.ABEIYUN_ENABLED }}
+      ABEIYUN_LOGIN_URL: ${{ vars.ABEIYUN_LOGIN_URL }}
+      ABEIYUN_RENEW_URL: ${{ vars.ABEIYUN_RENEW_URL }}
       ABEIYUN_USERNAME_2: ${{ secrets.ABEIYUN_USERNAME_2 }}
       ABEIYUN_PASSWORD_2: ${{ secrets.ABEIYUN_PASSWORD_2 }}
       ABEIYUN_LABEL_2: ${{ vars.ABEIYUN_LABEL_2 }}
       ABEIYUN_ENABLED_2: ${{ vars.ABEIYUN_ENABLED_2 }}
+      ABEIYUN_LOGIN_URL_2: ${{ vars.ABEIYUN_LOGIN_URL_2 }}
+      ABEIYUN_RENEW_URL_2: ${{ vars.ABEIYUN_RENEW_URL_2 }}
       ABEIYUN_USERNAME_3: ${{ secrets.ABEIYUN_USERNAME_3 }}
       ABEIYUN_PASSWORD_3: ${{ secrets.ABEIYUN_PASSWORD_3 }}
       ABEIYUN_LABEL_3: ${{ vars.ABEIYUN_LABEL_3 }}
       ABEIYUN_ENABLED_3: ${{ vars.ABEIYUN_ENABLED_3 }}
+      ABEIYUN_LOGIN_URL_3: ${{ vars.ABEIYUN_LOGIN_URL_3 }}
+      ABEIYUN_RENEW_URL_3: ${{ vars.ABEIYUN_RENEW_URL_3 }}
       ABEIYUN_USERNAME_4: ${{ secrets.ABEIYUN_USERNAME_4 }}
       ABEIYUN_PASSWORD_4: ${{ secrets.ABEIYUN_PASSWORD_4 }}
+      ABEIYUN_LABEL_4: ${{ vars.ABEIYUN_LABEL_4 }}
+      ABEIYUN_ENABLED_4: ${{ vars.ABEIYUN_ENABLED_4 }}
+      ABEIYUN_LOGIN_URL_4: ${{ vars.ABEIYUN_LOGIN_URL_4 }}
+      ABEIYUN_RENEW_URL_4: ${{ vars.ABEIYUN_RENEW_URL_4 }}
       ABEIYUN_USERNAME_5: ${{ secrets.ABEIYUN_USERNAME_5 }}
       ABEIYUN_PASSWORD_5: ${{ secrets.ABEIYUN_PASSWORD_5 }}
+      ABEIYUN_LABEL_5: ${{ vars.ABEIYUN_LABEL_5 }}
+      ABEIYUN_ENABLED_5: ${{ vars.ABEIYUN_ENABLED_5 }}
+      ABEIYUN_LOGIN_URL_5: ${{ vars.ABEIYUN_LOGIN_URL_5 }}
+      ABEIYUN_RENEW_URL_5: ${{ vars.ABEIYUN_RENEW_URL_5 }}
       ABEIYUN_USERNAME_6: ${{ secrets.ABEIYUN_USERNAME_6 }}
       ABEIYUN_PASSWORD_6: ${{ secrets.ABEIYUN_PASSWORD_6 }}
+      ABEIYUN_LABEL_6: ${{ vars.ABEIYUN_LABEL_6 }}
+      ABEIYUN_ENABLED_6: ${{ vars.ABEIYUN_ENABLED_6 }}
+      ABEIYUN_LOGIN_URL_6: ${{ vars.ABEIYUN_LOGIN_URL_6 }}
+      ABEIYUN_RENEW_URL_6: ${{ vars.ABEIYUN_RENEW_URL_6 }}
+      # <<< CLOUD_ACCOUNTS_END <<<
       LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
       LLM_MODEL: ${{ secrets.LLM_MODEL }}
@@ -151,11 +197,24 @@ jobs:
       ZHIHU_COOKIES: ${{ secrets.ZHIHU_COOKIES }}
       # 知乎发文话题（可选，空格分隔；留空用内置默认"免费云服务器 虚拟主机"）
       ZHIHU_TOPICS: ${{ vars.ZHIHU_TOPICS }}
+      # ── 通知 ──────────────────────────────────────────────────────────
       NOTIFY_OPENCLAW_URL: ${{ secrets.NOTIFY_OPENCLAW_URL }}
       NOTIFY_OPENCLAW_USER: ${{ secrets.NOTIFY_OPENCLAW_USER }}
       NOTIFY_OPENCLAW_PASSWORD: ${{ secrets.NOTIFY_OPENCLAW_PASSWORD }}
+      # 网关侧模型名（默认 openclaw；网关按 agentId 路由，一般不用改）
+      NOTIFY_OPENCLAW_MODEL: ${{ vars.NOTIFY_OPENCLAW_MODEL }}
+      # 通用 webhook 后端（install.ps1 选"通用 Webhook"时会写这个 Secret）。
+      # ⚠️ 这一行曾经漏了：Secret 写了、env 没透传，程序根本读不到——
+      #    选 webhook 的用户一条通知都收不到，而且全程没有任何报错。
+      #    现在有 tests::every_env_var_the_program_reads_is_wired_in_the_workflow 守着。
+      NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
       # 通知标签（可选，webhook 后端用；留空用内置默认 renewal）
       NOTIFY_TAG: ${{ vars.NOTIFY_TAG }}
+      # ── 可选调优（留空即用内置默认；都是 Variable，非敏感）────────────
+      LLM_TIMEOUT: ${{ vars.LLM_TIMEOUT }}                       # 单次生成超时秒数，默认 120
+      ARTICLE_READY_TIMEOUT: ${{ vars.ARTICLE_READY_TIMEOUT }}   # 裸 HTTP 就绪探测，默认 60
+      ARTICLE_VISIBLE_TIMEOUT: ${{ vars.ARTICLE_VISIBLE_TIMEOUT }} # 等文章公开上限，默认 720
+      HTTP_TIMEOUT: ${{ vars.HTTP_TIMEOUT }}                     # 厂商小请求超时，默认 30
       CHROME_PATH: /usr/bin/google-chrome
       FREE_RENEW_DEBUG_DIR: /tmp/freerenew-debug
       FREE_RENEW_LOG_DIR: /tmp/freerenew-logs

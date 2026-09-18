@@ -85,6 +85,52 @@ pub fn other_vendors(key: &str) -> impl Iterator<Item = &'static CloudProfile> +
     CLOUDS.iter().filter(move |p| p.key != key)
 }
 
+/// 本程序会从环境变量读取的**非账号**配置项。
+///
+/// 这份清单的唯一用途是被下面的测试拿去比对 `.github/workflows/renew.yml`：
+/// GitHub Actions 不支持通配符 Secrets，**没在 job 的 `env:` 段里声明的变量，
+/// 程序读到的就是空**——配了 Secret 也等于没配，而且全程没有任何报错。
+///
+/// 这个坑真的踩过：`install.ps1` 选"通用 Webhook"会写 `NOTIFY_WEBHOOK_URL`，
+/// 但 renew.yml 从来没透传它，选了 webhook 的用户一条通知都发不出去。
+/// 以后再加环境变量，这里补一行，测试会替你盯着工作流。
+pub const ENV_KEYS: &[&str] = &[
+    // LLM
+    "LLM_BASE_URL",
+    "LLM_API_KEY",
+    "LLM_MODEL",
+    "LLM_TIMEOUT",
+    // 发文平台
+    "PLATFORM_PROVIDER",
+    "PLATFORM_FALLBACK",
+    "CSDN_COOKIES",
+    "ZHIHU_COOKIES",
+    "ZHIHU_TOPICS",
+    // 通知
+    "NOTIFY_OPENCLAW_URL",
+    "NOTIFY_OPENCLAW_USER",
+    "NOTIFY_OPENCLAW_PASSWORD",
+    "NOTIFY_OPENCLAW_MODEL",
+    "NOTIFY_WEBHOOK_URL",
+    "NOTIFY_TAG",
+    // 限额
+    "HTTP_TIMEOUT",
+    "ARTICLE_READY_TIMEOUT",
+    "ARTICLE_VISIBLE_TIMEOUT",
+    // 运行环境（job 级 env，非 Secret）
+    "CHROME_PATH",
+    "FREE_RENEW_LOG_DIR",
+    "FREE_RENEW_DEBUG_DIR",
+];
+
+/// `renew.yml` 里预置的账号槽位数（第 1 台无后缀 + `_2`..`_N`）。
+///
+/// `install.ps1` 的 `MinCloudSlots` 和 renew.yml 的账号 env 块都必须与它一致：
+/// 加了台数却没在 env 段声明，那台就会被静默跳过。
+/// 生产代码用不到这个数字（程序读不到 yml），它纯粹是给下面那条测试当标尺的。
+#[cfg(test)]
+const PRESET_ACCOUNT_SLOTS: usize = 6;
+
 /// 一个已装配好的云账号（凭据 + 生效端点 + 稳定标识）。
 #[derive(Clone)]
 pub struct CloudAccount {
@@ -1035,6 +1081,49 @@ password = "p5"
         assert_eq!(accounts[0].label, "三丰云(主力)");
         assert_eq!(accounts[1].label, "三丰云(备用)");
         assert_eq!(accounts[2].label, "阿贝云(主力)");
+    }
+
+    /// 程序能读到的环境变量，工作流必须全都透传。
+    ///
+    /// GitHub Actions 不支持通配符 Secrets：**没在 renew.yml 的 `env:` 段声明的
+    /// 变量，程序读到的就是空**——配了 Secret 也等于没配，而且没有任何报错。
+    /// 这个坑真的踩过（`NOTIFY_WEBHOOK_URL` 写了 Secret 却没透传，选 webhook
+    /// 通知的用户一条都收不到）。这条测试把"靠人记住"变成"改漏了就红"。
+    #[test]
+    fn every_env_var_the_program_reads_is_wired_in_the_workflow() {
+        let yaml = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/renew.yml"),
+        )
+        .expect("读 .github/workflows/renew.yml");
+
+        let mut missing: Vec<String> = Vec::new();
+        for key in ENV_KEYS {
+            if !yaml.contains(&format!("{key}:")) {
+                missing.push((*key).to_string());
+            }
+        }
+        // 账号变量：每个厂商 × 每个预置槽位 × 每个字段。
+        // install.ps1 生成的账号 env 块与这份展开必须逐字一致。
+        for profile in CLOUDS {
+            let upper = profile.key.to_ascii_uppercase();
+            for slot in 1..=PRESET_ACCOUNT_SLOTS {
+                for field in ACCOUNT_FIELDS {
+                    let name = if slot == 1 {
+                        format!("{upper}_{field}")
+                    } else {
+                        format!("{upper}_{field}_{slot}")
+                    };
+                    if !yaml.contains(&format!("{name}:")) {
+                        missing.push(name);
+                    }
+                }
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "renew.yml 的 env 段没透传这些变量，程序会读到空值（等于没配）：{missing:?}"
+        );
     }
 
     #[test]

@@ -77,9 +77,13 @@ gh variable set SANFENGYUN_LABEL_2 --body "备用机"    # 通知/日志里显�
 gh variable set ABEIYUN_ENABLED_3  --body "false"     # 临时停用第 3 台，凭据留着
 ```
 
-> ⚠️ **每加一台，都要在 `.github/workflows/renew.yml` 的 `env:` 段补一对 `_N` 行**
-> （第 1 台的无后缀行是现成的；第 2 台起预置到了 `_6`，加更多台照抄并改后缀即可）。
-> GitHub Actions 不接受通配符 Secrets，未在 env 里声明的编号变量程序读不到。
+> ⚠️ **每加一台，`.github/workflows/renew.yml` 的 `env:` 段必须同步补上对应行**
+> （第 1 台用无后缀名；第 2 台起预置到了 `_6`，加更多台照抄一组六行并改后缀）。
+> GitHub Actions 不接受通配符 Secrets——**没在 env 段声明的编号变量，程序读不到**，
+> 那台就会被静默跳过（日志里连一条都没有）。
+>
+> **走 `install.ps1` 装的话不用管**：向导会按你实际配置的台数自动重写
+> `CLOUD_ACCOUNTS_BEGIN/END` 之间那一整块并提交。手动加台才需要自己补。
 > 未定义的 Secret 展开为空串，程序会跳过空槽位，不会报错。
 >
 > ⚠️ 用 gh 设 Secret 时，值必须用 `--body "实际值"` 直接给；`--body -` 会把 Secret 存成字面量 `-`（gh 只在完全不给 `--body` 时才读 stdin）。
@@ -150,6 +154,11 @@ gh variable set PLATFORM_FALLBACK --body "none"
 - **OpenClaw → 微信**（你有一台跑 OpenClaw 的服务器）：见下节。
 - **通用 Webhook**（Server酱 / 企业微信机器人 / Bark…）：`gh secret set NOTIFY_WEBHOOK_URL --body "https://…"`
 
+> ⚠️ webhook 后端的 Secret 必须能在工作流里透传才生效。`renew.yml` 的 `env:` 段里
+> 曾经漏了 `NOTIFY_WEBHOOK_URL` 这一行——Secret 写了但程序读不到，选 webhook 的用户
+> 一条通知都收不到，而且全程没有任何报错。现在有一条单元测试专门守着"程序读的每个
+> 环境变量都必须在工作流里透传"，加变量时忘了接线会直接在 CI 变红。
+
 （完全不配也能跑，失败只体现在 Actions 页红叉。）
 
 ### 5. 首跑验证
@@ -160,7 +169,9 @@ gh variable set PLATFORM_FALLBACK --body "none"
 
 两家都连的用户：`test_platforms` 填任意值——知乎与 CSDN 各发一篇**草稿**（全部停在公开发布前一步，不占发文额度），日志给出两条草稿链接，一次看清主/备两条链路是否都活着。验证后去平台侧把测试草稿删掉。
 
-正式点火：Actions → free-server-renewal → Run workflow。首次含 Linux 编译约 4 分钟。绿了之后，按仓库 cron（默认每天 09:30 北京时间）自动检查；没到期几秒退出。
+正式点火：Actions → free-server-renewal → Run workflow。首次含 Linux 编译约 4 分钟。绿了之后按仓库 cron 自动检查；没到期几秒退出。
+
+cron 默认 `7 * * * *`——**每小时的第 7 分钟**，刻意避开整点：GitHub 官方文档写明定时任务在高负载时会延迟或跳过，而"高负载时段包括每个整点的开始"，实测写成整点时一天只触发了 6 次（期望 24 次）。向导里也可以改成每天一次（会写成 `23 <UTC小时> * * *`，同样避开整点）。
 
 ---
 
