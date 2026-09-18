@@ -36,13 +36,19 @@ licenses and by fair-practice conventions.
              retention is satisfied by this file and LICENSE).
 
 ----------------------------------------------------------------------------
-3. gautamkrishnar/keepalive-workflow (GitHub Action)
+3. gautamkrishnar/keepalive-workflow (GitHub Action) — NO LONGER USED
 ----------------------------------------------------------------------------
   Source:    https://github.com/marketplace/actions/keepalive-workflow
   License:   MIT
-  Use:       GitHub Actions workflow step (.github/workflows/renew.yml).
-             Prevents GitHub's 60-day auto-disable of scheduled workflows
-             by appending a no-op commit when the repository is inactive.
+  Use:       formerly a workflow step in .github/workflows/renew.yml, which
+             kept scheduled workflows from being auto-disabled by GitHub
+             after 60 days of repository inactivity.
+  Status:    Removed. The upstream action was blocked by GitHub for ToS
+             reasons in 2025-04 (the marketplace repository no longer exists,
+             the job fails at "Set up job" with "Repository access blocked").
+             This project now implements the same behaviour as a
+             self-contained job inside renew.yml, with zero third-party
+             dependencies. Listed here as a historical record only.
 
 ----------------------------------------------------------------------------
 4. CSDN x-ca signing constants (public frontend constants)

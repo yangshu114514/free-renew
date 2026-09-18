@@ -7,7 +7,35 @@
 //! 敏感项（密码/cookie/api key）既可写在文件也可走 env：
 //!   [clouds.sanfengyun] password = "..."          # 文件方式
 //!   SANFENGYUN_PASSWORD=...                       # env 方式（覆盖文件）
+//!
+//! ## 多账号
+//!
+//! 同一厂商可配任意多个账号（例如两台三丰云 + 三台阿贝云）。两种写法等价，
+//! 旧配置一行都不用改：
+//!
+//! ```toml
+//! # 数组表：该厂商的第 1、2…个账号（新写法，账户数不限）
+//! [[clouds.sanfengyun]]
+//! username = "13800000000"
+//! password = "pw-1"
+//! label    = "主力"          # 可选，通知/日志里显示为「三丰云(主力)」
+//!
+//! [[clouds.sanfengyun]]
+//! username = "13900000000"
+//! password = "pw-2"
+//! label    = "备用"
+//!
+//! # 单表：等价于"该厂商只有一个账号"（旧写法，继续支持）
+//! [clouds.abeiyun]
+//! username = "13800000000"
+//! password = "pw"
+//! ```
+//!
+//! 厂商 key（`sanfengyun`/`abeiyun`/未来的第三家）**不写死在结构体里**：
+//! `clouds` 是一张「厂商 key → 账号列表」的表，新增厂商只需在
+//! `config::CLOUDS` 加一条元数据，本文件与 config.rs 的装配循环都不必改。
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::Deserialize;
@@ -27,28 +55,45 @@ pub struct FileConfig {
     pub limits: LimitsSection,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct CloudsSection {
-    pub sanfengyun: Option<CloudAccountConfig>,
-    pub abeiyun: Option<CloudAccountConfig>,
-}
+/// `[clouds]` 段：厂商 key → 该厂商的账号（一个或一组）。
+pub type CloudsSection = BTreeMap<String, OneOrMany<CloudAccountConfig>>;
 
+/// TOML 的单表与数组表共用一个 Rust 类型。
+///
+/// `[clouds.x]`（表）与 `[[clouds.x]]`（数组表）在 TOML 里是两种形状，
+/// 但用户意图相同——前者是"只有一台"，后者是"有多台"。untagged 让 serde
+/// 先试单表再试数组，于是旧配置的 `[clouds.sanfengyun]` 不需要任何迁移。
 #[derive(Debug, Clone, Deserialize)]
-pub struct CloudAccountConfig {
-    pub username: String,
-    pub password: String,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
+#[serde(untagged)]
+pub enum OneOrMany<T> {
+    One(Box<T>),
+    Many(Vec<T>),
 }
 
-impl Default for CloudAccountConfig {
-    fn default() -> Self {
-        Self {
-            username: String::new(),
-            password: String::new(),
-            enabled: default_true(),
+impl<T> OneOrMany<T> {
+    /// 摊平成列表：单表 → 单元素列表。
+    pub fn into_vec(self) -> Vec<T> {
+        match self {
+            Self::One(one) => vec![*one],
+            Self::Many(many) => many,
         }
     }
+}
+
+/// 单个云账号的凭据。username/password 允许缺省（由编号环境变量提供），
+/// 这样文件里可以只写 `label`，凭据全走 Secrets。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CloudAccountConfig {
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    /// false = 本轮跳过该账号（不改用户名密码即可临时停用一台）
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// 通知/日志里的人类可读名字（可选）。默认用厂商名，配了就显示为「三丰云(主力)」。
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -78,12 +123,24 @@ pub fn default_zhihu_topics() -> Vec<String> {
     vec!["免费云服务器".into(), "虚拟主机".into()]
 }
 
+/// 纯环境变量场景（GitHub Actions 无 config.toml）用的默认骨架。
+/// 放在这里而不是在 config.rs 里再写一份字段与默认值，是为了让"默认值"只有一个来源。
+impl Default for ZhihuPlatformConfig {
+    fn default() -> Self {
+        Self {
+            cookie: String::new(),
+            topics: default_zhihu_topics(),
+            toc: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct CsdnPlatformConfig {
     /// 单行 k=v; k=v 形态的完整 Cookie（采集器产出）
     pub cookie: String,
-    #[serde(default = "default_creation_statement")]
     /// CSDN 创作声明：0=无 1=AI辅助 2=整合 3=个人观点。默认 1（诚实声明）。
+    #[serde(default = "default_creation_statement")]
     pub creation_statement: u8,
     #[serde(default = "default_tags")]
     pub tags: Vec<String>,
@@ -94,7 +151,21 @@ pub struct CsdnPlatformConfig {
     pub x_ca_key: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// 纯环境变量场景的默认骨架，理由同 `ZhihuPlatformConfig`。
+impl Default for CsdnPlatformConfig {
+    fn default() -> Self {
+        Self {
+            cookie: String::new(),
+            creation_statement: default_creation_statement(),
+            tags: default_tags(),
+            categories: vec![],
+            app_secret: None,
+            x_ca_key: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct AiSection {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
@@ -111,12 +182,17 @@ pub struct AiSection {
     /// 必含关键词
     #[serde(default)]
     pub required_keywords: Vec<String>,
-    /// 生成重试次数
+    /// 生成重试次数（至少 1，0 会让生成流程一次都不跑）
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+    /// 采样温度（留空用内置 1.0）
+    pub temperature: Option<f32>,
+    /// 是否发送 `enable_thinking=false`（ModelScope Qwen3 系需要；其它供应商可关）
+    #[serde(default = "default_true")]
+    pub disable_thinking: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct NotifySection {
     #[serde(default)]
     pub webhook_url: String,
@@ -138,7 +214,7 @@ pub struct OpenClawNotifyConfig {
     pub model: String,
 }
 
-fn default_openclaw_model() -> String {
+pub fn default_openclaw_model() -> String {
     "openclaw".into()
 }
 
@@ -152,16 +228,6 @@ pub struct LimitsSection {
     pub http_timeout: u64,
 }
 
-impl Default for NotifySection {
-    fn default() -> Self {
-        Self {
-            webhook_url: String::new(),
-            tag: default_notify_tag(),
-            openclaw: None,
-        }
-    }
-}
-
 impl Default for LimitsSection {
     fn default() -> Self {
         Self {
@@ -171,35 +237,24 @@ impl Default for LimitsSection {
     }
 }
 
-impl Default for AiSection {
-    fn default() -> Self {
-        Self {
-            base_url: None,
-            api_key: None,
-            model: None,
-            angles: vec![],
-            lengths: vec![],
-            forbidden_words: vec![],
-            required_keywords: vec![],
-            max_retries: default_max_retries(),
-        }
-    }
-}
-
-fn default_true() -> bool {
+/// 默认值只有这一处定义：config.rs 的纯环境变量分支也调这里，不再各抄一份。
+pub fn default_true() -> bool {
     true
 }
-fn default_creation_statement() -> u8 {
+pub fn default_creation_statement() -> u8 {
     1
 }
-fn default_tags() -> Vec<String> {
+pub fn default_tags() -> Vec<String> {
     vec!["云服务器".into()]
 }
-fn default_max_retries() -> u32 {
+pub fn default_max_retries() -> u32 {
     3
 }
-fn default_notify_tag() -> String {
+pub fn default_notify_tag() -> String {
     "renewal".into()
+}
+pub fn default_temperature() -> f32 {
+    1.0
 }
 fn default_article_wait() -> u64 {
     // 裸 HTTP 就绪检查必被 CSDN WAF 521，300s 纯属空等；真正门禁在 Chrome 截图。
@@ -220,18 +275,108 @@ impl FileConfig {
         Ok(cfg)
     }
 
-    /// 查找配置文件：显式路径 > ./config.toml。找不到返回 None（纯 env 模式合法）。
-    pub fn find(explicit: Option<&Path>) -> Option<anyhow::Result<Self>> {
+    /// 查找配置文件：显式路径 > ./config.toml。
+    ///
+    /// 返回 `Result<Option<Self>>`：`Ok(None)`=没有配置文件（纯 env 模式，合法），
+    /// `Err`=文件存在但读不了/解析不了（硬错误，调用方据此明确报错而不是 panic）。
+    pub fn find(explicit: Option<&Path>) -> anyhow::Result<Option<Self>> {
         let path = match explicit {
             Some(p) => p.to_path_buf(),
             None => {
                 let local = Path::new("config.toml");
                 if !local.exists() {
-                    return None;
+                    return Ok(None);
                 }
                 local.to_path_buf()
             }
         };
-        Some(Self::load(&path))
+        Self::load(&path).map(Some)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 旧写法（单表）必须继续可解析——线上已有配置一行不改也要能跑。
+    #[test]
+    fn legacy_single_table_still_parses() {
+        let cfg: FileConfig = toml::from_str(
+            r#"
+[clouds.sanfengyun]
+username = "13800000000"
+password = "pw"
+enabled = true
+
+[clouds.abeiyun]
+username = "13800000001"
+password = "pw2"
+"#,
+        )
+        .expect("旧格式必须可解析");
+        let sf = cfg
+            .clouds
+            .get("sanfengyun")
+            .expect("三丰云段")
+            .clone()
+            .into_vec();
+        assert_eq!(sf.len(), 1);
+        assert_eq!(sf[0].username, "13800000000");
+        assert!(sf[0].enabled, "enabled 缺省为 true");
+        assert!(sf[0].label.is_none());
+        assert_eq!(
+            cfg.clouds.get("abeiyun").unwrap().clone().into_vec().len(),
+            1
+        );
+    }
+
+    /// 新写法：同一厂商多个账号。
+    #[test]
+    fn multi_account_array_parses_in_order() {
+        let cfg: FileConfig = toml::from_str(
+            r#"
+[[clouds.sanfengyun]]
+username = "13800000000"
+password = "pw1"
+label = "主力"
+
+[[clouds.sanfengyun]]
+username = "13900000000"
+password = "pw2"
+label = "备用"
+
+[[clouds.sanfengyun]]
+username = "13700000000"
+password = "pw3"
+enabled = false
+"#,
+        )
+        .expect("数组表必须可解析");
+        let sf = cfg
+            .clouds
+            .get("sanfengyun")
+            .expect("三丰云段")
+            .clone()
+            .into_vec();
+        assert_eq!(sf.len(), 3, "三个账号一个都不能丢");
+        assert_eq!(sf[0].label.as_deref(), Some("主力"));
+        assert_eq!(sf[1].username, "13900000000");
+        assert!(!sf[2].enabled, "enabled=false 要读到");
+    }
+
+    /// 只写 label、凭据走编号环境变量的写法（Actions 场景）。
+    #[test]
+    fn credentialless_slot_allowed() {
+        let cfg: FileConfig = toml::from_str(
+            r#"
+[[clouds.abeiyun]]
+label = "备用机"
+"#,
+        )
+        .expect("只写 label 必须可解析");
+        let ab = cfg.clouds.get("abeiyun").unwrap().clone().into_vec();
+        assert_eq!(ab.len(), 1);
+        assert!(ab[0].username.is_empty());
+        assert!(ab[0].enabled);
     }
 }

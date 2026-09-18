@@ -25,7 +25,13 @@ pub struct RunContext {
 impl RunContext {
     pub fn init() -> anyhow::Result<Self> {
         let now = chrono_like_timestamp();
-        let run_id = format!("run-{}", now.replace([':', ' '], "-"));
+        // run_id 带上 pid：秒级时间戳在两个进程同时起（定时任务撞上手动触发）时
+        // 会撞名，两者的 JSONL 写进同一个文件互相截断，事后只剩半份日志。
+        let run_id = format!(
+            "run-{}-{}",
+            now.replace([':', ' '], "-"),
+            std::process::id()
+        );
 
         // 文件日志目录：FREE_RENEW_LOG_DIR > ./logs
         // 空串按"未设置"处理：`create_dir_all("")` 直接报错会让 main 在任何
@@ -35,16 +41,22 @@ impl RunContext {
             .filter(|d| !d.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("logs"));
-        std::fs::create_dir_all(&dir)?;
-        let path = dir.join(format!("{run_id}.log.jsonl"));
-        let file = std::fs::File::create(&path)?;
 
-        tracing::info!(target: "log", "JSON 日志文件: {}", path.display());
+        // 日志是辅助手段，不是续期流程的前提：目录不可写（只读挂载/权限/磁盘满）
+        // 时降级为"只打终端"，绝不让整轮续期在"还没有任何日志"的状态下中止——
+        // 那样用户连一句解释都拿不到。
+        let json_sink = match open_sink(&dir, &run_id) {
+            Ok(file) => Some(Mutex::new(file)),
+            Err(e) => {
+                tracing::error!("日志文件不可用（{e:#}），本轮仅输出到终端，不落 JSONL");
+                None
+            }
+        };
 
         Ok(Self {
             run_id,
             started: Instant::now(),
-            json_sink: Some(Mutex::new(file)),
+            json_sink,
         })
     }
 
@@ -59,14 +71,29 @@ impl RunContext {
             "status": status,
             "detail": detail,
         });
-        if let Ok(mut f) = sink.lock() {
-            let _ = writeln!(f, "{line}");
+        match sink.lock() {
+            Ok(mut f) => {
+                let _ = writeln!(f, "{line}");
+            }
+            // 锁中毒（某次写盘时 panic）会让此后所有事件静默消失——这本身要留痕
+            Err(e) => tracing::warn!("JSON 日志锁不可用，本条事件未落盘: {e}"),
         }
     }
 
     pub fn elapsed_secs(&self) -> u64 {
         self.started.elapsed().as_secs()
     }
+}
+
+/// 创建并打开本次运行的 JSONL 日志文件。
+fn open_sink(dir: &std::path::Path, run_id: &str) -> anyhow::Result<std::fs::File> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| anyhow::anyhow!("创建日志目录 {} 失败: {e}", dir.display()))?;
+    let path = dir.join(format!("{run_id}.log.jsonl"));
+    let file = std::fs::File::create(&path)
+        .map_err(|e| anyhow::anyhow!("创建日志文件 {} 失败: {e}", path.display()))?;
+    tracing::info!(target: "log", "JSON 日志文件: {}", path.display());
+    Ok(file)
 }
 
 /// 调试产物目录（文章全文、截图、页面 HTML）。

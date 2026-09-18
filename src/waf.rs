@@ -12,11 +12,18 @@
 
 use anyhow::{bail, Context, Result};
 
+/// 挑战页通常 ~2KB，正常文章页 100KB+。
+///
+/// 这个阈值同时被两处用到：本模块的 `is_challenge`（太短才是挑战）与
+/// screenshot 的"HTTP 200 且内容够大才算真页面"。两边各写一个 20_000 字面量
+/// 必然会漂移（logging.rs 里刚刚批评过同一类问题），故只在这里定义一次。
+pub const CHALLENGE_MAX_BYTES: usize = 20_000;
+
 /// 判断 HTML 是否为 521 挑战页（而非真页面/403 硬拒页）。
 /// 供裸 HTTP 探测与 Chrome DOM 内容共用：签名是强特征，阈值放宽防
 /// DOM 注入内容干扰判断（正常文章页 100KB+，挑战页 ~2KB）。
 pub fn is_challenge(html: &str) -> bool {
-    html.len() < 20_000
+    html.len() < CHALLENGE_MAX_BYTES
         && (html.contains("acw_sc")
             || html.contains("window.onload=setTimeout")
             || html.contains("iw("))
@@ -57,8 +64,10 @@ console.error('scripts executed: ' + executed);
 /// 求解挑战页，返回 "name=value; ..." 形态的 Cookie 串。
 pub fn solve(challenge_html: &str) -> Result<String> {
     // 临时文件名带 pid：共享 /tmp 上避免多实例互踩
-    let challenge_path = std::env::temp_dir().join(format!("freerenew_challenge_{}.html", std::process::id()));
-    let solver_path = std::env::temp_dir().join(format!("freerenew_solver_{}.js", std::process::id()));
+    let challenge_path =
+        std::env::temp_dir().join(format!("freerenew_challenge_{}.html", std::process::id()));
+    let solver_path =
+        std::env::temp_dir().join(format!("freerenew_solver_{}.js", std::process::id()));
     std::fs::write(&challenge_path, challenge_html).context("写挑战页临时文件失败")?;
     std::fs::write(&solver_path, NODE_SOLVER).context("写求解器临时文件失败")?;
 
@@ -76,7 +85,11 @@ pub fn solve(challenge_html: &str) -> Result<String> {
     let stderr = String::from_utf8_lossy(&out.stderr);
     let stdout = String::from_utf8_lossy(&out.stdout);
     if !out.status.success() {
-        bail!("node 求解器退出码 {:?}: {}", out.status.code(), stderr.trim());
+        bail!(
+            "node 求解器退出码 {:?}: {}",
+            out.status.code(),
+            stderr.trim()
+        );
     }
     tracing::debug!("挑战求解器: {}", stderr.trim());
 
@@ -110,5 +123,3 @@ mod tests {
         assert!(!is_challenge(hard));
     }
 }
-
-

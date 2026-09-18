@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   free-renew 交互式安装向导：仓库 → 云账号 → LLM → 发文平台(CSDN/知乎)Cookie → 通知 → 定时与首跑。
@@ -6,6 +6,10 @@
 .DESCRIPTION
   全程问答式，本地登录 Git + GitHub CLI 即可完成。所有配置以加密 Secrets / 仓库 Variables
   存入你自己的私有副本，代码不接触凭据。
+
+  同一家云厂商可配任意多台（例如 2 台三丰云 + 3 台阿贝云）：第 1 台用无后缀的
+  SANFENGYUN_USERNAME/PASSWORD（与旧版安装完全一致），第 2 台起用 _2、_3……
+  重跑本向导并少配几台时，脚本会自动清掉多出来的编号 Secrets。
 
 .PARAMETER DryRun
   演练模式：只走一遍问答与决策、打印将要执行的动作，绝不 fork、不写 Secret、不改 cron、
@@ -16,7 +20,8 @@
 
 .EXAMPLE
   .\install.ps1
-  .\install.ps1 -DryRun -Answers @("","","","","2","myurl","u","p","9","y")
+  # 演练：三丰云配 2 台、阿贝云不配、走 CSDN、不配通知（答案按问答顺序给出）
+  .\install.ps1 -DryRun -Answers @("13800000000","pw1","主力","13900000000","pw2","","","","https://api.example.com/v1","sk-demo","gpt-4o-mini","N","1","0","9","Y")
 #>
 [CmdletBinding()]
 param(
@@ -142,26 +147,73 @@ function Set-GhVar($name, $value) {
 }
 
 # ── [2/6] 云账号 ─────────────────────────────────────────────
-Step 2 "云厂商账号（免费服务器的控制台账密，仅存入你仓库的加密 Secrets；只用一家则另一家留空跳过）"
-$sfUser = Ask "三丰云 手机号（回车跳过）"
-$sfPass = Ask "三丰云 密码"
-$abUser = Ask "阿贝云 手机号（回车跳过）"
-$abPass = Ask "阿贝云 密码"
-# 空=跳过该厂商（config 侧本来就支持只配一家）；半套凭据同样跳过并警告——
-# 原先把空值直接 `| gh secret set`，GitHub 拒绝空 Secret → 脚本 Die，
-# 想只跑一家的用户根本装不完。
-function Set-CloudCreds($label, $keyPrefix, $user, $pass) {
-    $u = "$user".Trim(); $p = "$pass"
-    if ($u -eq "" -and $p -eq "") { Warn "$label 留空 → 跳过此厂商"; return "skipped" }
-    if ($u -eq "" -or  $p -eq "") { Warn "$label 只填了一半（用户名/密码缺一）→ 跳过，半套凭据登录不了"; return "skipped" }
-    Set-GhSecret "${keyPrefix}_USERNAME" $u
-    Set-GhSecret "${keyPrefix}_PASSWORD" $p
-    return "ok"
+Step 2 "云厂商账号（同一家可配多台——2 台三丰云 + 3 台阿贝云都行；两家都不配就没有可续期的对象）"
+Write-Host @"
+  逐台输入即可，回车结束该厂商。凭据只写入你仓库的加密 Secrets。
+  第 1 台用 SANFENGYUN_USERNAME / SANFENGYUN_PASSWORD（与旧版安装完全一致），
+  第 2 台起用 SANFENGYUN_USERNAME_2 / _3 ……，程序按序号逐台续期。
+  想临时停用某一台：给对应编号加 SANFENGYUN_ENABLED_2=false 变量即可，不必删凭据。
+"@ -ForegroundColor Gray
+
+# 逐台采集某个厂商的账号；回车 = 结束该厂商。
+function Read-CloudAccounts($label) {
+    $list = @()
+    while ($true) {
+        $n = $list.Count + 1
+        $hint = if ($n -eq 1) { "（回车跳过该厂商）" } else { "（回车结束）" }
+        $u = "$(Ask "$label 第 $n 台 手机号 $hint")".Trim()
+        if ($u -eq "") { break }
+        $p = "$(Ask "$label 第 $n 台 密码")"
+        if ($p -eq "") { Warn "$label 第 $n 台密码为空 → 该台跳过，本厂商采集结束"; break }
+        $lbl = "$(Ask "$label 第 $n 台 备注名（可选，如 主力/备用；只用于通知与排障，回车跳过）")".Trim()
+        $list += [pscustomobject]@{ User = $u; Pass = $p; Label = $lbl }
+    }
+    return ,$list
 }
-$sfOk = Set-CloudCreds "三丰云" "SANFENGYUN" $sfUser $sfPass
-$abOk = Set-CloudCreds "阿贝云" "ABEIYUN" $abUser $abPass
-if ($sfOk -ne "ok" -and $abOk -ne "ok" -and -not $DryRun) { Die "两家云账号都没配置——本工具没有可续期的对象" }
-Ok "云账号完成（三丰云:$sfOk 阿贝云:$abOk）"
+
+# 写入某厂商的全部账号。第 1 台用无后缀变量（旧部署零迁移），第 2 台起用 _N。
+function Set-CloudAccounts($label, $keyPrefix, $accounts) {
+    if ($accounts.Count -eq 0) { Warn "$label 未配置 → 跳过此厂商"; return }
+    for ($i = 0; $i -lt $accounts.Count; $i++) {
+        $suffix = if ($i -eq 0) { "" } else { "_" + ($i + 1) }
+        Set-GhSecret "${keyPrefix}_USERNAME$suffix" $accounts[$i].User
+        Set-GhSecret "${keyPrefix}_PASSWORD$suffix" $accounts[$i].Pass
+        if ($accounts[$i].Label -ne "") { Set-GhVar "${keyPrefix}_LABEL$suffix" $accounts[$i].Label }
+    }
+    Ok "$label 已配置 $($accounts.Count) 台"
+}
+
+# 清理上一次残留的多余账号 Secret。
+# 上次装 3 台、这次只配 2 台时，第 3 台的 Secret 仍会被程序读到并继续续期——
+# "删掉一台"这个动作不清理编号变量，在程序侧等于根本没做。
+function Remove-StaleCloudSecrets($keyPrefix, $keepCount) {
+    if ($DryRun) { return }
+    $secretNames = @(gh secret list @repoArg 2>$null | ForEach-Object { ($_ -split '\s+')[0] })
+    foreach ($n in $secretNames) {
+        if ($n -match "^${keyPrefix}_(USERNAME|PASSWORD|ENABLED)_(\d+)$" -and [int]$Matches[2] -gt $keepCount) {
+            gh secret delete $n @repoArg 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { Ok "清理残留 Secret $n（账号数已减少，不再使用）" }
+        }
+    }
+    $varNames = @(gh variable list @repoArg 2>$null | ForEach-Object { ($_ -split '\s+')[0] })
+    foreach ($n in $varNames) {
+        if ($n -match "^${keyPrefix}_LABEL_(\d+)$" -and [int]$Matches[1] -gt $keepCount) {
+            gh variable delete $n @repoArg 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { Ok "清理残留 Variable $n（账号数已减少，不再使用）" }
+        }
+    }
+}
+
+$sfAccounts = Read-CloudAccounts "三丰云"
+$abAccounts = Read-CloudAccounts "阿贝云"
+Set-CloudAccounts "三丰云" "SANFENGYUN" $sfAccounts
+Set-CloudAccounts "阿贝云" "ABEIYUN" $abAccounts
+Remove-StaleCloudSecrets "SANFENGYUN" $sfAccounts.Count
+Remove-StaleCloudSecrets "ABEIYUN" $abAccounts.Count
+if ($sfAccounts.Count -eq 0 -and $abAccounts.Count -eq 0 -and -not $DryRun) {
+    Die "两家云账号都没配置——本工具没有可续期的对象"
+}
+Ok "云账号完成（三丰云 $($sfAccounts.Count) 台、阿贝云 $($abAccounts.Count) 台）"
 
 # ── [3/6] LLM ────────────────────────────────────────────────
 Step 3 "LLM 配置（写文章用，任何 OpenAI 兼容接口）"
@@ -330,9 +382,16 @@ Write-Host "  cron = `"$cron`" (UTC) = 北京时间 ${t}:30"
 Write-Host ""
 Write-Host "──────── 部署摘要 ────────" -ForegroundColor Cyan
 function Mask($s) { if ($s.Length -ge 5) { $s.Substring(0,3) + "****" + $s.Substring($s.Length-2) } else { "****" } }
+function MaskAccounts($accounts) {
+    if ($accounts.Count -eq 0) { return "(跳过)" }
+    return (($accounts | ForEach-Object {
+        if ($_.Label -ne "") { "$(Mask $_.User)[$($_.Label)]" } else { Mask $_.User }
+    }) -join "、")
+}
 Write-Host "仓库:     $repo"
-Write-Host "三丰云:   $(if ($sfOk -eq 'ok') { Mask $sfUser } else { '(跳过)' })"
-Write-Host "阿贝云:   $(if ($abOk -eq 'ok') { Mask $abUser } else { '(跳过)' })"
+Write-Host "三丰云:   $(MaskAccounts $sfAccounts)   共 $($sfAccounts.Count) 台"
+Write-Host "阿贝云:   $(MaskAccounts $abAccounts)   共 $($abAccounts.Count) 台"
+Write-Host "合计:     $($sfAccounts.Count + $abAccounts.Count) 台服务器将逐台检查续期"
 Write-Host "LLM:      $llmModel @ $llmBase"
 Write-Host "发文平台: $chosenPlatform（Cookie 已入 Secrets）"
 Write-Host "通知:     $notifyStatus"
@@ -393,7 +452,9 @@ if ($DryRun) {
 Write-Host @"
 后续你唯一可能要做的事:
   - 发文平台 Cookie 过期($chosenPlatform；数月一次) → 收到通知(需已配通知) → 重跑 $chosenRefresh
-  - 密码轮换 → 仓库 Settings→Secrets 直接改
-  - 一切正常时它每天定时看一眼，没到期几秒退出
-到期临近或异常时，若已配通知，你会收到提醒。
+  - 增删服务器 → 重跑本向导（多配几台就继续加，少配几台会自动清理残留的编号 Secrets）
+  - 临时停用某一台 → 仓库 Settings→Variables 里给对应编号加 XXX_ENABLED_N=false（如 ABEIYUN_ENABLED_2）
+  - 密码轮换 → 仓库 Settings→Secrets 直接改对应编号的项
+  - 一切正常时它按定时计划逐台检查，没到期几秒退出
+到期临近或异常时，若已配通知，你会收到提醒（每台各一条，标题里带厂商名与备注名）。
 "@ -ForegroundColor Green

@@ -5,29 +5,76 @@
 //! 自动重写（重写仍违规则放弃本轮、绝不发垃圾）：内容审核雷区（翻墙/内网穿透/
 //! 免备案/灰产/政治，一票否决）、绝对化与竞品名、AI 模板腔与结构失衡。
 //!
+//! 厂商相关的一切（名字、官网域名、别家名单）都从 `config::CloudProfile` 取，
+//! 本模块**不认识**任何厂商中文字符串——新增第三家厂商不用改这里一行代码。
+//!
 //! 可用 config.toml [ai] 覆盖/追加。
+
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use rand::seq::SliceRandom;
 use serde_json::json;
 
-use crate::config::LlmConfig;
+use crate::config::{other_vendors, CloudProfile, LlmConfig};
+
+/// 生成请求超时默认值（秒）。一次出 1500 字比厂商接口慢得多，故与 http_timeout
+/// 不同源；用 `LLM_TIMEOUT` 环境变量可覆盖。
+pub const LLM_REQUEST_TIMEOUT_SECS: u64 = 120;
 
 /// 默认禁词：真正的"求延期/白嫖"信号。不封"续期/续费"——那是用户过审文章标题里的
 /// 真实用词，封了反逼模型绕道写出更假的同义替换。
-pub const DEFAULT_FORBIDDEN: &[&str] = &["申请延期", "白嫖", "薅羊毛"];
+const DEFAULT_FORBIDDEN: &[&str] = &["申请延期", "白嫖", "薅羊毛"];
+
+/// 默认必含关键词（厂商名之外的通用词）。空配置时由 config 层兜这里，
+/// 生成端不再单独兜一份（两处兜底语义必然分裂）。
+const DEFAULT_KEYWORDS: &[&str] = &["免费云服务器", "免费虚拟主机"];
+
+/// 默认必含关键词表（config 层兜底用）。
+pub fn default_keywords() -> Vec<String> {
+    DEFAULT_KEYWORDS.iter().map(|s| s.to_string()).collect()
+}
 
 /// 规范红线：绝对化/对比贬损表述（validate 硬校验 + prompt 同步声明）。
 /// 注意范文里带引号的"永久免费"是转述驳斥他家的语境——校验只封宣传式用法，
 /// 故这些词在 prompt 里也明示"驳斥语境除外，能不用就不用"。
 const ABSOLUTE_WORDS: &[&str] = &[
-    "永久免费", "无限流量", "全网最好", "碾压", "吊打", "最好用", "最强",
+    "永久免费",
+    "无限流量",
+    "全网最好",
+    "碾压",
+    "吊打",
+    "最好用",
+    "最强",
 ];
 
 /// 规范红线：竞品名（含暗示性代称），出现即打回。
 const COMPETITOR_WORDS: &[&str] = &[
-    "阿里云", "腾讯云", "华为云", "京东云", "天翼云", "移动云", "UCloud",
-    "轻量应用", "某厂", "某大厂", "隔壁家", "别家", "同行",
+    "阿里云",
+    "腾讯云",
+    "华为云",
+    "京东云",
+    "天翼云",
+    "移动云",
+    "UCloud",
+    "轻量应用",
+    "某厂",
+    "某大厂",
+    "隔壁家",
+    "别家",
+    "同行",
+];
+
+/// 负面渲泄词：堆叠 = "措辞太坏"方向跑偏，同样打回。
+const GRIPE_WORDS: &[&str] = &[
+    "无奈",
+    "恶心",
+    "坑爹",
+    "坑人",
+    "离谱",
+    "受不了",
+    "气死",
+    "垃圾",
 ];
 
 /// 内容审核雷区词：命中**一票否决**，绝不发布。2026-09-12 血的教训——模型自由
@@ -36,30 +83,69 @@ const COMPETITOR_WORDS: &[&str] = &[
 /// 反向代理/官方文档/CDN节点"这类正当技术词（故不收单字"墙""政"、不收"代理/节点/官方"）。
 const SENSITIVE_WORDS: &[&str] = &[
     // 翻墙 / 境外接入（这些是独立灰产词，不会与正当技术词混淆）
-    "翻墙", "科学上网", "上网梯子", "梯子", "机场", "魔法上网", "境外访问", "墙外", "GFW",
-    "内网穿透", "frp", "frpc", "frps", "ngrok", "sunny-ngrok",
+    "翻墙",
+    "科学上网",
+    "上网梯子",
+    "梯子",
+    "机场",
+    "魔法上网",
+    "境外访问",
+    "墙外",
+    "GFW",
+    "内网穿透",
+    "frp",
+    "frpc",
+    "frps",
+    "ngrok",
+    "sunny-ngrok",
     // 规避备案 / 灰产用途
-    "免备案", "无需备案", "不备案", "免实名", "站群", "泛站", "寄生", "钓鱼", "仿站",
-    "洗白", "跑分", "搬砖", "撸羊毛", "撸包", "黑产", "灰产", "引流", "截流",
+    "免备案",
+    "无需备案",
+    "不备案",
+    "免实名",
+    "站群",
+    "泛站",
+    "寄生",
+    "钓鱼",
+    "仿站",
+    "洗白",
+    "跑分",
+    "搬砖",
+    "撸羊毛",
+    "撸包",
+    "黑产",
+    "灰产",
+    "引流",
+    "截流",
     // 政治 / 舆情敏感
-    "政府", "领导人", "制裁", "删帖", "维权", "上访", "舆情", "谣言", "异见",
+    "政府",
+    "领导人",
+    "制裁",
+    "删帖",
+    "维权",
+    "上访",
+    "舆情",
+    "谣言",
+    "异见",
 ];
 
-/// 雷区词命中检测：**ASCII 部分大小写不敏感**。模型经常把灰产词写成大写强调
-/// （FRP / Ngrok / GFW），逐字面匹配会整条漏网——这是"一票否决"红线，不能漏。
-/// 中文词无大小写，统一走同一路径；`to_lowercase` 对中文是恒等变换。
-fn sensitive_hits(text: &str) -> Vec<&'static str> {
-    let lowered = text.to_lowercase();
-    SENSITIVE_WORDS
-        .iter()
-        .filter(|w| lowered.contains(&w.to_lowercase()))
-        .copied()
-        .collect()
+/// 词表匹配统一入口：**ASCII 部分大小写不敏感**。
+///
+/// 模型经常把灰产词写成大写强调（FRP / Ngrok / GFW），逐字面匹配会整条漏网——
+/// 这是"一票否决"红线，不能漏。此前只有敏感词做了 to_lowercase，禁词/绝对化/竞品
+/// 各用一套逐字面 contains：同一个文件两套语义，改一处必漏另一处，故统一到这里。
+/// 调用方传入的 `lowered` 是全文小写化结果（中文无大小写，to_lowercase 恒等）。
+fn contains_ci(lowered: &str, needle: &str) -> bool {
+    if needle.is_ascii() {
+        lowered.contains(&needle.to_ascii_lowercase())
+    } else {
+        lowered.contains(needle)
+    }
 }
 
 /// 默认生成角度池：每个角度都落在规范结构内（开篇纠偏→实测→清单→适用→指引），
 /// 只换"本次更新的由头"，保证系列文章互相不像模板。
-pub const DEFAULT_ANGLES: &[&str] = &[
+const DEFAULT_ANGLES: &[&str] = &[
     "开篇纠偏：上一版说得太绝对/太夸张，这次用更准的事实修正它",
     "更新近况：新增了一段负载观察和一次小故障自救，回应评论区常见问题",
     "换季/节点复盘：距上次记录又过了段时间，续期节奏和稳定性有没有变化",
@@ -70,6 +156,16 @@ pub const DEFAULT_ANGLES: &[&str] = &[
     "帮新手排雷：把你会踩的坑（提醒设置、备份清理、开机自启）总结成提醒",
 ];
 
+/// 默认角度池（config 层兜底用）。
+pub fn default_angles() -> Vec<String> {
+    DEFAULT_ANGLES.iter().map(|s| s.to_string()).collect()
+}
+
+/// 默认禁词表（config 层兜底用）。
+pub fn default_forbidden() -> Vec<String> {
+    DEFAULT_FORBIDDEN.iter().map(|s| s.to_string()).collect()
+}
+
 /// 人设种子池：每篇随机注入一套"真实项目 + 数字"，逼模型言之有物、避免空泛。
 /// 这是过审关键——真人测评一定有具体在跑的东西和量出来的数字。
 ///
@@ -77,21 +173,64 @@ pub const DEFAULT_ANGLES: &[&str] = &[
 /// 这类词——它们是内容审核的"可能引起争议"高发雷区（曾导致模型生成的文章被知乎删除）。
 /// 需要"内网/穿透"这类真实感时，一律换成静态站、数据库、CI 定时任务等安全项。
 const PERSONA_SEEDS: &[(&str, &str)] = &[
-    ("FastAPI + PostgreSQL 后端、Nuxt3 SSR 前端、Redis 缓存", "CPU 偶尔冲到 75~80%，内存常驻 600MB 左右，5M 带宽扛日常访问绰绰有余"),
-    ("一个 Typecho 博客 + Nginx + 自动备份脚本", "负载常年 0.2~0.5，内存占用不到一半，磁盘每周涨几百 MB"),
-    ("Django 小站 + PostgreSQL + Nginx + 定时任务", "跑三个服务后内存吃到七成，CPU 峰值到过九成但没卡死过"),
-    ("自建搜索服务 + Node 接口 + 笔记同步", "冷启动慢一点，稳态内存 500MB 上下，接口响应几十毫秒"),
-    ("一个 Rust axum 服务 + SQLite + Caddy 自动 HTTPS", "编译时 CPU 会打满几分钟，平时内存占用很低，几百 MB 就够"),
-    ("Python 数据分析 notebook + JupyterHub + 定时拉数脚本", "跑大任务时内存吃紧要加 swap，日常挂小任务很稳"),
+    (
+        "FastAPI + PostgreSQL 后端、Nuxt3 SSR 前端、Redis 缓存",
+        "CPU 偶尔冲到 75~80%，内存常驻 600MB 左右，5M 带宽扛日常访问绰绰有余",
+    ),
+    (
+        "一个 Typecho 博客 + Nginx + 自动备份脚本",
+        "负载常年 0.2~0.5，内存占用不到一半，磁盘每周涨几百 MB",
+    ),
+    (
+        "Django 小站 + PostgreSQL + Nginx + 定时任务",
+        "跑三个服务后内存吃到七成，CPU 峰值到过九成但没卡死过",
+    ),
+    (
+        "自建搜索服务 + Node 接口 + 笔记同步",
+        "冷启动慢一点，稳态内存 500MB 上下，接口响应几十毫秒",
+    ),
+    (
+        "一个 Rust axum 服务 + SQLite + Caddy 自动 HTTPS",
+        "编译时 CPU 会打满几分钟，平时内存占用很低，几百 MB 就够",
+    ),
+    (
+        "Python 数据分析 notebook + JupyterHub + 定时拉数脚本",
+        "跑大任务时内存吃紧要加 swap，日常挂小任务很稳",
+    ),
 ];
 
 /// 默认目标字数池。规范要求 1200–1800 字（不含标题）；4 个档保证系列文章
 /// 长度不雷同，全部落在区间内。
 pub const DEFAULT_LENGTHS: &[usize] = &[1250, 1450, 1600, 1750];
 
+/// 正文下限 = 字数池最小档的 6/10。
+/// 门禁与"规范下限 1200"曾各写一个数（提示语说 1200、代码只卡 800），配
+/// `lengths = [3000]` 也照样放行；现在从配置的字数池派生，两边不可能再漂移。
+const MIN_LENGTH_NUM: usize = 6;
+const MIN_LENGTH_DEN: usize = 10;
+
+/// "为什么还愿意用"清单的硬性最少条数（规范要求 8-12 条，留出余量只卡 6）。
+const MIN_BULLETS: usize = 6;
+
+/// AI 腔命中阈值：达到即回炉。
+const MAX_AI_TELLS: usize = 3;
+
+/// 小标题数量上限（规范本身要求 5-6 个模块标题，故只卡 >=7）。
+const MAX_HEADINGS: usize = 6;
+
+/// 喂回下一轮的问题清单最多保留几条。
+const MAX_RETRY_FEEDBACK: usize = 3;
+
+/// 范文里代表厂商名的占位符。
+const VENDOR_PLACEHOLDER: &str = "{VENDOR}";
+
 /// 风格锚（用户提供的范文，few-shot 用）：语气校准的唯一真相——
 /// 正面克制不绝对化、负面具体不抱怨、清单收束、短句。
-const STYLE_EXAMPLE: &str = r##"# 阿贝云免费服务器实测：每7天手动续期，稳如老狗
+///
+/// 厂商名写成占位符：范文原本通篇是"阿贝云"，给三丰云生成时注入的范文里满是别家
+/// 名字，模型极易照抄——这正是"串厂商必被拒"那条校验要事后补救的根因。模板化后
+/// 防线从"事后拦"前移到"不产生"。
+const STYLE_EXAMPLE: &str = r##"# {VENDOR}免费服务器实测：每7天手动续期，稳如老狗
 
 之前写的“八个月零事故”确实有点夸张了——实际上我是每7天登录控制台手动点一次续期，断断续续用下来的。但正因为这种“主动维系”的使用方式，反而让我对它的稳定性有了更真实的体感：不是平台自动兜底，而是你愿意为它花30秒点一下按钮，它就真的给你稳稳跑着。
 
@@ -116,9 +255,9 @@ const STYLE_EXAMPLE: &str = r##"# 阿贝云免费服务器实测：每7天手动
 
 ## 适合谁这样用
 
-如果你能接受每7天花30秒点一下续期，并且用途是学生课设、Linux学习、博客/简历托管、API调试、个人网盘、笔记同步、跑点小脚本这类轻量场景——那阿贝云的免费云服务器就是目前最稳妥的选择之一。它不承诺“永久”，但兑现了“只要你愿意续，我就一直给”。
+如果你能接受每7天花30秒点一下续期，并且用途是学生课设、Linux学习、博客/简历托管、API调试、个人网盘、笔记同步、跑点小脚本这类轻量场景——那{VENDOR}的免费云服务器就是目前最稳妥的选择之一。它不承诺“永久”，但兑现了“只要你愿意续，我就一直给”。
 
-想试的自己搜“阿贝云”官网，实名后创建实例，记得设个每周提醒。新手建议先从虚拟主机上手，再过渡到云服务器，体验更平滑。
+想试的自己搜“{VENDOR}”官网，实名后创建实例，记得设个每周提醒。新手建议先从虚拟主机上手，再过渡到云服务器，体验更平滑。
 "##;
 
 pub struct Article {
@@ -141,7 +280,7 @@ fn system_prompt() -> String {
      不用绝对化词（永久免费/无限流量/全网最好/碾压/吊打一律禁止，转述驳斥语境也\
      尽量避开）。不提任何竞品名称，也不用‘某大厂/隔壁家’这类暗示代称。\n\
      语言：第一人称；短句为主，单句不超过35字；多用分号破折号切逻辑；允许适度\
-     口语（‘稳如老狗’‘绰绰有余’‘还要啥自行车’），不低俗不黑话；不滥用感叹号。\n\
+     口语（‘稳如老狗’‘绰绰有余’‘还要啥自行车’），不低俗不黑话；不滥用感叹号。\
      结构：开篇用一句纠偏/更新说明起手；实测段带配置、时长、负载、故障自救；\
      涉及虚拟主机则简述 FTP/数据库/维护公告；中段用8-12条短语清单答‘为什么还愿意\
      用’（每条以动词或名词短语开头，非完整句）；‘适合谁’列举具体场景；结尾给注册\
@@ -150,148 +289,266 @@ fn system_prompt() -> String {
         .to_string()
 }
 
+/// 把范文按当前厂商渲染（唯一的厂商相关替换点）。
+fn style_example_for(profile: &CloudProfile) -> String {
+    STYLE_EXAMPLE.replace(VENDOR_PLACEHOLDER, profile.name)
+}
+
 fn user_prompt(
     angle: &str,
     length: usize,
-    vendor: &str,
+    profile: &CloudProfile,
     required: &[String],
     forbidden: &[String],
     persona: (&str, &str),
 ) -> String {
-    let domain = if vendor == "三丰云" { "sanfengyun" } else { "abeiyun" };
-    let kw_list = required.join("”、“");
-    let forbidden_list = forbidden.join("、");
+    let vendor = profile.name;
+    let domain = profile.site_domain();
     let (stack, numbers) = persona;
+    // 关键词为空时整句跳过：原来的 join 会生成一对空引号 “” 塞进提示词
+    let kw_clause = if required.is_empty() {
+        String::new()
+    } else {
+        format!("必须自然包含关键词：“{}”，以及", required.join("”、“"))
+    };
+    let forbidden_clause = if forbidden.is_empty() {
+        String::new()
+    } else {
+        format!("禁止出现这些词：{}。\n", forbidden.join("、"))
+    };
     format!(
         "以【{angle}】为由头，写一篇 {vendor} 免费云服务器长期使用实测，正文 {length} 字左右（不含标题）。\n\n\
          你在这台机器上实际跑着：{stack}。观测到的资源情况：{numbers}。\
          把这些事实自然织进文章（可改写措辞、可补同类细节，但数字必须与这些观测一致）。\n\
-         必须自然包含关键词：“{kw_list}”，以及官网 https://www.{domain}.com（融进句子，别单列一行）。\n\
-         禁止出现这些词：{forbidden_list}。\n\
+         {kw_clause}官网 https://www.{domain}.com（融进句子，别单列一行）。\n\
+         {forbidden_clause}\
          涉及续期时，明确写清周期和操作方式；不得暗示它是生产级高可用方案，\
          必须强调轻量/实验/备用属性。\n\
          标题格式：# {vendor}免费[产品类型]实测：[核心差异点]+[时间/行为锚点]。\n\n\
          下面这篇是你自己的历史文章，**严格对齐它的语气、密度和结构**\
          （注意：厂商名、项目栈、数字以本次要求为准，不要照抄）：\n\n\
-         {STYLE_EXAMPLE}\n\n\
-         直接输出新文章 markdown，第一行是 # 标题，不要任何解释。"
+         {style}\n\n\
+         直接输出新文章 markdown，第一行是 # 标题，不要任何解释。",
+        style = style_example_for(profile),
     )
 }
 
 /// 检测"AI 腔"信号词/句式。命中不直接判死（LLM 偶尔误触），但累计过多则重试，
 /// 因为平台机审/编辑正是靠这类模板痕迹判定"非真人"——这是本次被删的真病根。
 const AI_TELLS: &[&str] = &[
-    "总而言之", "综上所述", "首先，", "其次，", "最后，", "值得一提的是",
-    "不难发现", "赋能", "一站式", "轻松搞定", "海量",
-    "无论是", "为你提供", "值得信赖", "性价比极高",
+    "总而言之",
+    "综上所述",
+    "首先，",
+    "其次，",
+    "最后，",
+    "值得一提的是",
+    "不难发现",
+    "赋能",
+    "一站式",
+    "轻松搞定",
+    "海量",
+    "无论是",
+    "为你提供",
+    "值得信赖",
+    "性价比极高",
 ];
 
-fn validate(text: &str, vendor: &str, required: &[String], forbidden: &[String]) -> Vec<String> {
-    // 内容审核雷区：一票否决，绝不发布（命中直接返回，逼重写；连续命中会耗尽重试
-    // 而放弃本轮，也好过把擦边文发上平台砸账号）。
-    let hits = sensitive_hits(text);
-    if !hits.is_empty() {
-        return vec![format!(
-            "含内容审核雷区词（一票否决，勿发）：{}——改用无害技术词重写",
-            hits.join("、")
-        )];
-    }
-    let mut problems = vec![];
-    if !text.contains(vendor) {
-        problems.push(format!("缺少厂商名 {vendor}"));
-    }
-    // 串厂商一票级错误：给三丰云的文章里出现"阿贝云"（few-shot 范文正是阿贝云，
-    // 模型最容易借这词），厂商审核会看成别家申请。
-    let other = match vendor {
-        "三丰云" => Some("阿贝云"),
-        "阿贝云" => Some("三丰云"),
-        _ => None,
-    };
-    if let Some(o) = other {
-        if text.contains(o) {
-            problems.push(format!("出现另一厂商名「{o}」——本次是 {vendor} 的续期文，串厂商必被拒"));
-        }
-    }
-    for kw in required {
-        if !kw.is_empty() && !text.contains(kw.as_str()) {
-            problems.push(format!("缺少关键词 {kw}"));
-        }
-    }
-    // 官网链接必须与本次续期厂商一致：给阿贝云的文章带三丰云链接，厂商人工审核
-    // 会判"文章与申请不符"直接拒（早先"任一域名即过"曾放过跨厂商串文）。
-    let want_domain = match vendor {
-        "三丰云" => Some("sanfengyun.com"),
-        "阿贝云" => Some("abeiyun.com"),
-        _ => None,
-    };
-    let missing_link = match want_domain {
-        Some(d) => !text.contains(d),
-        None => !text.contains("abeiyun.com") && !text.contains("sanfengyun.com"),
-    };
-    if missing_link {
-        problems.push(match want_domain {
-            Some(d) => format!("缺少/错挂官网链接（本次厂商要求含 {d}）"),
-            None => "缺少官网链接".into(),
-        });
-    }
-    for word in forbidden {
-        if !word.is_empty() && text.contains(word.as_str()) {
-            problems.push(format!("出现禁止词: {word}"));
-        }
-    }
-    for word in ABSOLUTE_WORDS {
-        if text.contains(word) {
-            problems.push(format!("绝对化表述（红线）: {word}"));
-        }
-    }
-    for word in COMPETITOR_WORDS {
-        if text.contains(word) {
-            problems.push(format!("提及竞品/暗示代称（红线）: {word}"));
-        }
-    }
-    // 负面失衡检测：抱怨词堆叠 = “措辞太坏”方向跑偏，同样打回
-    let gripes = ["无奈", "恶心", "坑爹", "坑人", "离谱", "受不了", "气死", "垃圾"]
+/// 内容审核雷区：一票否决，绝不发布（命中直接返回，逼重写；连续命中会耗尽重试
+/// 而放弃本轮，也好过把擦边文发上平台砸账号）。
+fn check_sensitive(lowered: &str) -> Vec<String> {
+    let hits: Vec<&str> = SENSITIVE_WORDS
         .iter()
-        .filter(|g| text.contains(**g))
-        .count();
-    if gripes >= 2 {
-        problems.push(format!("抱怨词 {gripes} 处，负面渲染过度——负面要具体克制，一句带过解决方式"));
+        .filter(|w| contains_ci(lowered, w))
+        .copied()
+        .collect();
+    if hits.is_empty() {
+        return vec![];
     }
-    let chars = text.chars().count();
-    // 范文正文约 1100+ 字，规范要 1200-1800（不含标题）；下限卡 800 防注水失败品
-    if chars < 800 {
-        problems.push(format!("正文太短（{chars} 字），规范下限 1200 字，至少 800"));
+    vec![format!(
+        "含内容审核雷区词（一票否决，勿发）：{}——改用无害技术词重写",
+        hits.join("、")
+    )]
+}
+
+/// 厂商一致性：必须提本家厂商名，且**不能**出现任何别家厂商名或官网域名。
+/// 串厂商是"必被拒"级错误——人工审核会把它看成替别家申请的。
+fn check_vendor(text: &str, profile: &CloudProfile, lowered: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    if !text.contains(profile.name) {
+        problems.push(format!("缺少厂商名 {}", profile.name));
     }
-    // “为什么愿意继续用”清单：至少 6 条 markdown 列表项
-    let bullets = text.lines().filter(|l| l.trim_start().starts_with("- ")).count();
-    if bullets < 6 {
-        problems.push(format!("清单式总结只有 {bullets} 条，规范要求 8-12 条（- 开头的列表项）"));
-    }
-    // AI 腔：命中 >=3 处判为"太像机器文"，回炉
-    let tells = AI_TELLS.iter().filter(|t| text.contains(**t)).count();
-    if tells >= 3 {
-        problems.push(format!("AI 模板腔过重（命中 {tells} 处套话），改写成更松散真实的第一人称"));
-    }
-    // 小标题过密 = 模板结构信号；规范本身要求 5-6 个模块标题，故只卡 >=7
-    if text.matches("\n## ").count() >= 7 {
-        problems.push("小标题过多（>6），结构太模板化".into());
+    let want = profile.site_domain();
+    for other in other_vendors(profile.key) {
+        if text.contains(other.name) {
+            problems.push(format!(
+                "出现另一厂商名「{}」——本次是 {} 的续期文，串厂商必被拒",
+                other.name, profile.name
+            ));
+        }
+        // 别家也可能以域名形态出现（范文/模型记忆里的官网链接），一并拦
+        let d = other.site_domain();
+        if lowered.contains(&d) {
+            problems.push(format!("出现别家官网链接 {d}（本家要求 {want}）"));
+        }
     }
     problems
 }
 
-pub fn generate_article(llm: &LlmConfig, vendor: &str) -> Result<Article> {
-    let client = reqwest::blocking::Client::new();
+/// 官网链接必须与本次续期厂商一致：给阿贝云的文章带三丰云链接，厂商人工审核
+/// 会判"文章与申请不符"直接拒。
+fn check_links(lowered: &str, profile: &CloudProfile) -> Vec<String> {
+    let want = profile.site_domain();
+    if lowered.contains(&want) {
+        vec![]
+    } else {
+        vec![format!("缺少/错挂官网链接（本次厂商要求含 {want}）")]
+    }
+}
+
+fn check_keywords(text: &str, required: &[String]) -> Vec<String> {
+    required
+        .iter()
+        .filter(|kw| !kw.is_empty() && !text.contains(kw.as_str()))
+        .map(|kw| format!("缺少关键词 {kw}"))
+        .collect()
+}
+
+fn check_words(lowered: &str, forbidden: &[String]) -> Vec<String> {
+    forbidden
+        .iter()
+        .filter(|w| !w.is_empty() && contains_ci(lowered, w))
+        .map(|w| format!("出现禁止词: {w}"))
+        .collect()
+}
+
+/// 语气红线：绝对化表述、竞品/暗示代称、负面渲泄堆叠。
+fn check_tone(lowered: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    for word in ABSOLUTE_WORDS {
+        if contains_ci(lowered, word) {
+            problems.push(format!("绝对化表述（红线）: {word}"));
+        }
+    }
+    for word in COMPETITOR_WORDS {
+        if contains_ci(lowered, word) {
+            problems.push(format!("提及竞品/暗示代称（红线）: {word}"));
+        }
+    }
+    let gripes = GRIPE_WORDS
+        .iter()
+        .filter(|g| contains_ci(lowered, g))
+        .count();
+    if gripes >= 2 {
+        problems.push(format!(
+            "抱怨词 {gripes} 处，负面渲染过度——负面要具体克制，一句带过解决方式"
+        ));
+    }
+    problems
+}
+
+/// 正文长度下限（由字数池派生，见 MIN_LENGTH_NUM 注释）。
+fn min_body_chars(lengths: &[usize]) -> usize {
+    let floor = lengths
+        .iter()
+        .copied()
+        .filter(|n| *n > 0)
+        .min()
+        .unwrap_or(DEFAULT_LENGTHS[0]);
+    floor * MIN_LENGTH_NUM / MIN_LENGTH_DEN
+}
+
+/// 结构红线：字数、清单条数、AI 腔、小标题密度。
+fn check_shape(text: &str, lowered: &str, lengths: &[usize]) -> Vec<String> {
+    let mut problems = Vec::new();
+    let chars = text.chars().count();
+    let floor = min_body_chars(lengths);
+    if chars < floor {
+        problems.push(format!(
+            "正文太短（{chars} 字）：字数池最小档 {floor_target} 字，至少需 {floor} 字",
+            floor_target = lengths
+                .iter()
+                .copied()
+                .filter(|n| *n > 0)
+                .min()
+                .unwrap_or(0),
+        ));
+    }
+    // “为什么愿意继续用”清单：至少 6 条 markdown 列表项
+    let bullets = text
+        .lines()
+        .filter(|l| l.trim_start().starts_with("- "))
+        .count();
+    if bullets < MIN_BULLETS {
+        problems.push(format!(
+            "清单式总结只有 {bullets} 条，规范要求 8-12 条（- 开头的列表项）"
+        ));
+    }
+    let tells = AI_TELLS.iter().filter(|t| contains_ci(lowered, t)).count();
+    if tells >= MAX_AI_TELLS {
+        problems.push(format!(
+            "AI 模板腔过重（命中 {tells} 处套话），改写成更松散真实的第一人称"
+        ));
+    }
+    if text.matches("\n## ").count() > MAX_HEADINGS {
+        problems.push(format!("小标题过多（>{MAX_HEADINGS}），结构太模板化"));
+    }
+    problems
+}
+
+/// 生成前的机器校验：每条规则各自独立，命中即判不合规、自动重写。
+/// 拆成流水线而不是一条长 if 链，是为了"加一条规则"不再需要通读 90 行。
+fn validate(
+    text: &str,
+    profile: &CloudProfile,
+    required: &[String],
+    forbidden: &[String],
+    lengths: &[usize],
+) -> Vec<String> {
+    // 全文小写化一次，供所有大小写不敏感的词表匹配复用
+    let lowered = text.to_lowercase();
+
+    let fatal = check_sensitive(&lowered);
+    if !fatal.is_empty() {
+        return fatal;
+    }
+
+    let mut problems = Vec::new();
+    problems.extend(check_vendor(text, profile, &lowered));
+    problems.extend(check_keywords(text, required));
+    problems.extend(check_links(&lowered, profile));
+    problems.extend(check_words(&lowered, forbidden));
+    problems.extend(check_tone(&lowered));
+    problems.extend(check_shape(text, &lowered, lengths));
+    problems
+}
+
+/// 拆标题与正文。`None` = 第一行不是合法标题。
+///
+/// 原来拆不出来时回落到标题"无题"并照常发布——一篇没标题的文章审核通过率极低，
+/// 等同于不合规，应该重试而不是硬发。另：只剥一层 `#`，`trim_start_matches('#')`
+/// 会把 `### 标题` 的前导 # 全吃掉，层级信息就丢了。
+fn split_title_body(text: &str) -> Option<(String, String)> {
+    let (first, rest) = text.split_once('\n')?;
+    let title = first.strip_prefix('#')?.trim();
+    if title.is_empty() {
+        return None;
+    }
+    Some((title.to_string(), rest.trim().to_string()))
+}
+
+pub fn generate_article(llm: &LlmConfig, profile: &CloudProfile) -> Result<Article> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(llm.timeout_secs))
+        .build()
+        .context("LLM HTTP 客户端构建失败")?;
     let url = format!("{}/chat/completions", llm.base_url);
     let mut rng = rand::thread_rng();
-    // 默认必含词：厂商名之外的通用关键词
-    let required: Vec<String> = if llm.required_keywords.is_empty() {
-        vec!["免费云服务器".into(), "免费虚拟主机".into()]
-    } else {
-        llm.required_keywords.clone()
-    };
+    let required = llm.required_keywords.clone();
     let mut retry_feedback: Vec<String> = vec![]; // 历轮问题清单（不带旧正文，避免与新人设事实冲突）
-    // 人设种子打乱后按轮取用：每轮（含重试）换一套具体项目+数字，
-    // 重试才是真的换内容，而不是拿同一批事实逼模型换个说法
+                                                  // 人设种子打乱后按轮取用：每轮（含重试）换一套具体项目+数字，
+                                                  // 重试才是真的换内容，而不是拿同一批事实逼模型换个说法。
+                                                  // 重试次数超过池大小时会从头复用——那说明重试空间已经用尽，此时"换事实"的
+                                                  // 边际收益极小，不值得为此无限扩池。
     let mut personas: Vec<&(&str, &str)> = PERSONA_SEEDS.iter().collect();
     personas.shuffle(&mut rng);
 
@@ -302,7 +559,7 @@ pub fn generate_article(llm: &LlmConfig, vendor: &str) -> Result<Article> {
             .map(String::as_str)
             .unwrap_or("写一次通用的使用体验");
         // 字数池为空只可能来自手写配置（config.rs 已兜默认），兜到池内首档；
-        // 不编一个池外的 400——那与本文件声明的 1250-1750 区间自相矛盾
+        // 不编一个池外的 400——那与本文件声明的区间自相矛盾
         let length = llm
             .lengths
             .choose(&mut rng)
@@ -310,7 +567,14 @@ pub fn generate_article(llm: &LlmConfig, vendor: &str) -> Result<Article> {
             .unwrap_or(DEFAULT_LENGTHS[0]);
         let persona = personas[attempt % personas.len()];
 
-        let user = user_prompt(angle, length, vendor, &required, &llm.forbidden_words, *persona);
+        let user = user_prompt(
+            angle,
+            length,
+            profile,
+            &required,
+            &llm.forbidden_words,
+            *persona,
+        );
         let mut messages = vec![
             json!({"role": "system", "content": system_prompt()}),
             json!({"role": "user", "content": user}),
@@ -321,25 +585,30 @@ pub fn generate_article(llm: &LlmConfig, vendor: &str) -> Result<Article> {
             messages.push(json!({"role": "user", "content": format!("上一版被判定不合格，问题：{all}。这次务必规避：结构更松散、详略不均、至少一个真实缺点，不要套话，重写一篇。")}));
         }
 
-        let payload = json!({
+        let mut payload = json!({
             "model": llm.model,
             "messages": messages,
-            "temperature": 1.0,
-            // ModelScope Qwen3 系列：不关 thinking 首轮返回 choices:null
-            "enable_thinking": false,
+            "temperature": llm.temperature,
         });
+        if llm.disable_thinking {
+            // ModelScope Qwen3 系列：不关 thinking 首轮返回 choices:null。
+            // 该字段非 OpenAI 标准，其它供应商不认——用 ai.disable_thinking=false 关掉。
+            payload["enable_thinking"] = json!(false);
+        }
 
         let resp = client
             .post(&url)
             .bearer_auth(&llm.api_key)
             .json(&payload)
-            .timeout(std::time::Duration::from_secs(120))
             .send()
             .context("LLM 请求失败")?;
         let status = resp.status();
         let body = resp.text().context("LLM 响应读取失败")?;
         if !status.is_success() {
-            bail!("LLM HTTP {status}: {}", crate::http::truncate_chars(&body, 300));
+            bail!(
+                "LLM HTTP {status}: {}",
+                crate::http::truncate_chars(&body, 300)
+            );
         }
 
         let text = serde_json::from_str::<serde_json::Value>(&body)
@@ -350,39 +619,53 @@ pub fn generate_article(llm: &LlmConfig, vendor: &str) -> Result<Article> {
             .map(str::to_string)
             .context("LLM 响应缺少 content")?;
 
-        let mut problems = validate(&text, vendor, &required, &llm.forbidden_words);
-        if !text.starts_with('#') {
-            // 无标题的文章审核通过率极低，等同不合规，重试
-            problems.push("第一行不是 # 标题".into());
-        }
+        let mut problems = validate(
+            &text,
+            profile,
+            &required,
+            &llm.forbidden_words,
+            &llm.lengths,
+        );
         if problems.is_empty() {
-            let (title, body) = match text.split_once('\n') {
-                Some((t, rest)) if t.starts_with('#') => {
-                    (t.trim_start_matches('#').trim().to_string(), rest.trim().to_string())
+            match split_title_body(&text) {
+                Some((title, body_markdown)) => {
+                    return Ok(Article {
+                        word_count: body_markdown.chars().count(),
+                        title,
+                        body_markdown,
+                    });
                 }
-                _ => ("无题".into(), text.clone()),
-            };
-            return Ok(Article {
-                word_count: body.chars().count(),
-                title,
-                body_markdown: body,
-            });
+                // 无标题的文章审核通过率极低，等同不合规，重试
+                None => problems.push("第一行不是合法的 # 标题".into()),
+            }
         }
 
-        // 累积问题清单喂回下一轮（只记问题，不记旧正文，避免人设串味）
-        retry_feedback.push(problems.join("；"));
-        retry_feedback.dedup();
-        if retry_feedback.len() > 3 {
+        // 累积问题清单喂回下一轮（只记问题，不记旧正文，避免人设串味）。
+        // 去重必须用 contains：dedup() 只合并**相邻**重复，而新问题恒追加在末尾，
+        // 原写法实际是恒不生效的空操作。
+        let feedback = problems.join("；");
+        if !retry_feedback.contains(&feedback) {
+            retry_feedback.push(feedback);
+        }
+        if retry_feedback.len() > MAX_RETRY_FEEDBACK {
             retry_feedback.remove(0);
         }
     }
 
-    bail!("生成文章 {} 次仍不合规，放弃本次（宁缺毋滥，不做垃圾提交）", llm.max_retries)
+    bail!(
+        "生成文章 {} 次仍不合规，放弃本次（宁缺毋滥，不做垃圾提交）",
+        llm.max_retries
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CLOUDS;
+
+    fn profile(key: &str) -> &'static CloudProfile {
+        CLOUDS.iter().find(|p| p.key == key).expect("厂商必须存在")
+    }
 
     fn ok_body() -> String {
         let mut s = String::from("# 三丰云免费云服务器实测：每7天手动续期\n\n三丰云 免费云服务器 免费虚拟主机 https://www.sanfengyun.com 用着还行\n\n");
@@ -398,39 +681,73 @@ mod tests {
         // 范文是"严格对齐"的校准源：它自己若含红线词（曾实锤：号称“永久免费”的
         // 转述句），模型原样借用就被 validate 打回，下一轮又被要求对齐范文——
         // 死循环空耗重试。范文对自家校验器必须干净（官网链接项按任务厂商而定，不查）。
-        let problems = validate(STYLE_EXAMPLE, "阿贝云", &[], &[]);
-        let red = problems
-            .iter()
-            .filter(|p| p.contains("雷区") || p.contains("绝对化") || p.contains("竞品"))
-            .collect::<Vec<_>>();
-        assert!(red.is_empty(), "few-shot 范文踩了自己的红线: {red:?}");
+        for key in ["sanfengyun", "abeiyun"] {
+            let p = profile(key);
+            let rendered = style_example_for(p);
+            // 模板化后范文里**只能**有本家厂商名，绝不能残留另一家
+            for other in other_vendors(p.key) {
+                assert!(
+                    !rendered.contains(other.name),
+                    "{key} 的范文里残留了别家厂商名 {}",
+                    other.name
+                );
+            }
+            let problems = validate(&rendered, p, &[], &[], DEFAULT_LENGTHS);
+            let red = problems
+                .iter()
+                .filter(|p| p.contains("雷区") || p.contains("绝对化") || p.contains("竞品"))
+                .collect::<Vec<_>>();
+            assert!(
+                red.is_empty(),
+                "{key} 的 few-shot 范文踩了自己的红线: {red:?}"
+            );
+        }
     }
 
     #[test]
     fn cross_vendor_article_is_rejected() {
         // 给阿贝云续期，模型却把范文里的三丰云元素带进来 → 必须打回
         let mut s = String::from("# 阿贝云免费云服务器实测：三丰云用户也说好\n\n阿贝云 免费云服务器 免费虚拟主机 https://www.sanfengyun.com 不错\n\n");
-        for i in 0..8 { s.push_str(&format!("- 优点{i}：稳定\n")); }
+        for i in 0..8 {
+            s.push_str(&format!("- 优点{i}：稳定\n"));
+        }
         s.push_str(&"z".repeat(1000));
-        let problems = validate(&s, "阿贝云", &[], &[]);
-        assert!(problems.iter().any(|p| p.contains("串厂商")), "漏拦另一厂商名: {problems:?}");
-        assert!(problems.iter().any(|p| p.contains("官网链接")), "漏拦错误域名: {problems:?}");
+        let p = profile("abeiyun");
+        let problems = validate(&s, p, &[], &[], DEFAULT_LENGTHS);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("串厂商") || p.contains("另一厂商名")),
+            "漏拦另一厂商名: {problems:?}"
+        );
+        assert!(
+            problems.iter().any(|p| p.contains("官网链接")),
+            "漏拦错误域名: {problems:?}"
+        );
         // 换成本家名字+本家域名后必须放行
-        let fixed = s.replace("三丰云用户也说好", "半年观察").replace("sanfengyun", "abeiyun");
-        assert!(validate(&fixed, "阿贝云", &[], &[]).is_empty(), "本家文章被误杀");
+        let fixed = s
+            .replace("三丰云用户也说好", "半年观察")
+            .replace("sanfengyun", "abeiyun");
+        assert!(
+            validate(&fixed, p, &[], &[], DEFAULT_LENGTHS).is_empty(),
+            "本家文章被误杀"
+        );
     }
 
     #[test]
     fn clean_article_passes() {
-        assert!(validate(&ok_body(), "三丰云", &[], &[]).is_empty());
+        assert!(validate(&ok_body(), profile("sanfengyun"), &[], &[], DEFAULT_LENGTHS).is_empty());
     }
 
     #[test]
     fn sensitive_word_is_fatal() {
         let mut s = ok_body();
         s.push_str("平时还用 frp 做内网穿透很方便");
-        let problems = validate(&s, "三丰云", &[], &[]);
-        assert!(problems.iter().any(|p| p.contains("审核雷区")), "应命中敏感词: {problems:?}");
+        let problems = validate(&s, profile("sanfengyun"), &[], &[], DEFAULT_LENGTHS);
+        assert!(
+            problems.iter().any(|p| p.contains("审核雷区")),
+            "应命中敏感词: {problems:?}"
+        );
         // 一票否决：即使别的都没有也不该放行
         assert!(!problems.is_empty());
     }
@@ -439,15 +756,40 @@ mod tests {
     fn sensitive_words_are_case_insensitive() {
         // 模型爱用大写强调灰产词（FRP/Ngrok/GFW）；逐字面比对会整条漏网，
         // 而这是一票否决红线——漏一次就是账号收违规警告（2026-09-12 事故）。
-        for raw in ["顺手用 FRP 打洞", "Ngrok 挺好用", "当年研究过 GFW", "自建 Frp 服务"] {
+        for raw in [
+            "顺手用 FRP 打洞",
+            "Ngrok 挺好用",
+            "当年研究过 GFW",
+            "自建 Frp 服务",
+        ] {
             let mut s = ok_body();
             s.push_str(raw);
-            let problems = validate(&s, "三丰云", &[], &[]);
+            let problems = validate(&s, profile("sanfengyun"), &[], &[], DEFAULT_LENGTHS);
             assert!(
                 problems.iter().any(|p| p.contains("审核雷区")),
                 "大小写变体漏网: {raw} → {problems:?}"
             );
         }
+    }
+
+    #[test]
+    fn forbidden_and_absolute_words_are_case_insensitive_too() {
+        // 同一文件里两套匹配语义是本项目修过的坑：禁词/绝对化/竞品也必须大小写不敏感
+        let mut s = ok_body();
+        s.push_str("配置里写了 UCloud 作为对比");
+        let problems = validate(
+            &s,
+            profile("sanfengyun"),
+            &[String::new()],
+            &[],
+            DEFAULT_LENGTHS,
+        );
+        assert!(
+            problems.iter().any(|p| p.contains("竞品")),
+            "竞品词大小写变体漏网: {problems:?}"
+        );
+        // 空字符串禁词不得误伤（配置里常有空行）
+        assert!(!problems.iter().any(|p| p.contains("禁止词: ")));
     }
 
     #[test]
@@ -457,24 +799,71 @@ mod tests {
         // 误杀的代价同样是"这轮没续上"，所以红线词也要按最窄语义收。
         let mut ok = ok_body();
         ok.push_str("配置里尽量别留魔法数字，抽成具名常量更好维护");
-        let problems = validate(&ok, "三丰云", &[], &[]);
-        assert!(!problems.iter().any(|p| p.contains("审核雷区")), "误杀正当技术词: {problems:?}");
+        let problems = validate(&ok, profile("sanfengyun"), &[], &[], DEFAULT_LENGTHS);
+        assert!(
+            !problems.iter().any(|p| p.contains("审核雷区")),
+            "误杀正当技术词: {problems:?}"
+        );
 
         // 但它作为灰产隐语出现时必须照样拦下
         let mut bad = ok_body();
         bad.push_str("顺便聊聊魔法上网那些事");
-        assert!(validate(&bad, "三丰云", &[], &[])
-            .iter()
-            .any(|p| p.contains("审核雷区")), "灰产语境漏网");
+        assert!(
+            validate(&bad, profile("sanfengyun"), &[], &[], DEFAULT_LENGTHS)
+                .iter()
+                .any(|p| p.contains("审核雷区")),
+            "灰产语境漏网"
+        );
     }
 
     #[test]
     fn sensitive_words_do_not_false_positive_on_legit_tech() {
         // "防火墙" 含 "火"，"官方文档""CDN节点""反向代理" 都是正当词，不得误杀
         let mut s = String::from("# 三丰云免费云服务器实测\n\n三丰云 免费云服务器 免费虚拟主机 https://www.sanfengyun.com\n防火墙规则照抄官方文档，CDN 节点与反向代理都在跑，政策范围内自用\n\n");
-        for i in 0..8 { s.push_str(&format!("- 优点{i}\n")); }
+        for i in 0..8 {
+            s.push_str(&format!("- 优点{i}\n"));
+        }
         s.push_str(&"y".repeat(1000));
-        let problems = validate(&s, "三丰云", &[], &[]);
-        assert!(!problems.iter().any(|p| p.contains("审核雷区")), "误杀正当技术词: {problems:?}");
+        let problems = validate(&s, profile("sanfengyun"), &[], &[], DEFAULT_LENGTHS);
+        assert!(
+            !problems.iter().any(|p| p.contains("审核雷区")),
+            "误杀正当技术词: {problems:?}"
+        );
+    }
+
+    #[test]
+    fn length_floor_follows_configured_pool() {
+        // 门禁必须跟着配置走：lengths 提到 3000 时，1000 字的正文要判太短，
+        // 而原来的硬编码 800 会让它蒙混过关
+        let s = ok_body();
+        let chars = s.chars().count();
+        assert!(chars > 800, "样例本身要超过旧门禁，测试才有意义");
+        let problems = validate(&s, profile("sanfengyun"), &[], &[], &[3000]);
+        assert!(
+            problems.iter().any(|p| p.contains("正文太短")),
+            "字数门禁没跟着字数池走: {problems:?}"
+        );
+    }
+
+    #[test]
+    fn untitled_output_is_rejected() {
+        // 拆不出标题时不能回落成"无题"硬发
+        assert!(split_title_body("正文直接开始，没有标题").is_none());
+        assert!(split_title_body("# \n正文").is_none());
+        let (t, b) = split_title_body("### 三级标题\n正文").unwrap();
+        // 只剥一层 #：层级标记不能被吃光
+        assert_eq!(t, "## 三级标题");
+        assert_eq!(b, "正文");
+    }
+
+    #[test]
+    fn prompt_omits_clauses_for_empty_lists() {
+        let p = profile("sanfengyun");
+        let prompt = user_prompt("角度", 1500, p, &[], &[], ("栈", "数字"));
+        assert!(!prompt.contains("“”"), "空关键词不得生成空引号: {prompt}");
+        assert!(!prompt.contains("禁止出现这些词"));
+        assert!(prompt.contains("https://www.sanfengyun.com"));
+        assert!(prompt.contains("三丰云"));
+        assert!(!prompt.contains("阿贝云"), "提示词里不得出现别家厂商");
     }
 }
