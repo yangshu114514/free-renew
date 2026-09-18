@@ -2,16 +2,49 @@
 # 复制为 config.toml 后填写；config.toml 已被 .gitignore 排除，永远不要提交真实配置。
 # 环境变量优先级高于本文件（GitHub Actions Secrets 走环境变量即可，本地用文件更方便）。
 
-# ── 云账号 ─────────────────────────────────────────────
-[clouds.sanfengyun]
+# ── 云账号（同一家可配任意多台）────────────────────────
+# 想配几台就写几段 [[clouds.<厂商>]]，顺序 = 程序逐台执行的顺序。
+# 例如下面这份配了 2 台三丰云 + 3 台阿贝云。
+#
+# 旧写法 [clouds.sanfengyun]（单表）等价于"该厂商只有一台"，继续可用，无需迁移。
+#
+# label 只影响通知与日志的显示名（显示为「三丰云(主力)」），不填就用厂商名。
+# 想临时停用某一台：把它的 enabled 改成 false（凭据留着，随时改回来）。
+
+[[clouds.sanfengyun]]
 username = "13800000000"       # 手机号
 password = "your-password"
 enabled = true                 # false = 本轮跳过该账号
+label = "主力"
 
-[clouds.abeiyun]
+[[clouds.sanfengyun]]
+username = "13900000000"
+password = "your-other-password"
+label = "备用"
+
+[[clouds.abeiyun]]
 username = "13800000000"
 password = "your-password"
-enabled = true
+label = "主力"
+
+[[clouds.abeiyun]]
+username = "13900000000"
+password = "your-other-password"
+
+[[clouds.abeiyun]]
+username = "13700000000"
+password = "your-third-password"
+
+# 凭据也可以只走环境变量（GitHub Actions 场景没有 config.toml）：
+#   第 1 台  SANFENGYUN_USERNAME / SANFENGYUN_PASSWORD
+#   第 2 台  SANFENGYUN_USERNAME_2 / SANFENGYUN_PASSWORD_2      （第 3 台用 _3……）
+#   备注名   SANFENGYUN_LABEL_2 = "备用机"          （仓库 Variable）
+#   停用     SANFENGYUN_ENABLED_2 = false           （仓库 Variable）
+# 第 1 台的无后缀变量名与旧版完全一致，老部署一行都不用改。
+# 环境变量与文件同时存在时，环境变量按序号覆盖对应槽位。
+#
+# 端点被 WAF 拉黑时可用 <KEY>_LOGIN_URL / <KEY>_RENEW_URL（同样支持 _N 后缀）
+# 指向自建反代，无需改代码。
 
 # ── 发文平台 ───────────────────────────────────────────
 [platform]
@@ -44,18 +77,26 @@ categories = []                # 需为博客中已存在的分类名
 # x_ca_key = "..."
 
 # ── AI 文章生成（OpenAI 兼容接口）─────────────────────
+# 注意：每台服务器各生成一篇文章（续期要提交"这台机器的续期申请所依据的文章"）。
+# 5 台 = 每轮最多 5 篇 LLM 生成 + 5 次发文 + 5 次截图，时间与发文额度都是线性增长。
 [ai]
 base_url = "https://api.example.com/v1"   # 或环境变量 LLM_BASE_URL
 api_key = "sk-..."                        # 或环境变量 LLM_API_KEY
 model = "gpt-4o-mini"                     # 或环境变量 LLM_MODEL
-max_retries = 3                           # 生成不合规时的重试上限
+max_retries = 3                           # 生成不合规时的重试上限（至少 1）
+# temperature = 1.0                       # 采样温度
+# disable_thinking = true                 # 是否发 enable_thinking=false（ModelScope Qwen3 系需要；
+                                          # 其它供应商不认这个字段时设为 false）
+# 单次生成请求超时（秒）：默认 120，也可用环境变量 LLM_TIMEOUT 覆盖
+# （LLM 出文比厂商接口慢得多，故与 limits.http_timeout 不同源）
 
 # 可选自定义（留空/省略则用内置默认）
 # angles = [                              # 每篇随机抽一个角度，保证文章不重复
 #   "从零开始第一次用云服务器的新手视角，写踩坑和摸索过程",
 #   "记录一次具体的部署经历，带操作细节",
 # ]
-# lengths = [1250, 1450, 1600, 1750]       # 目标字数池（规范 1200-1800 字）
+# lengths = [1250, 1450, 1600, 1750]       # 目标字数池（规范 1200-1800 字）。
+                                          # 正文下限 = 池中最小档的 60%，跟着这里走
 # forbidden_words = ["申请延期", "白嫖"]    # 出现即判不合规、自动重写（注意："续期"不禁，是真实用法）
 # required_keywords = ["免费云服务器", "免费虚拟主机"]
 # 另：生成端内置**内容审核红线**（翻墙/内网穿透/免备案/灰产/政治等，见 src/writer.rs
@@ -64,13 +105,16 @@ max_retries = 3                           # 生成不合规时的重试上限
 # ── 失败/成功通知 ──────────────────────────────────────
 [notify]
 webhook_url = ""               # 通用 webhook（备用）；或环境变量 NOTIFY_WEBHOOK_URL
-tag = "renewal"
+tag = "renewal"                # 或环境变量 NOTIFY_TAG
+# 多台服务器时每台各发一条通知（标题带厂商名与备注名，如「三丰云(主力) 续期已提交」）。
 
 # OpenClaw 后端（推荐）：通知经网关 agent → 微信送达
 # URL 形如 https://<你的域名或IP:端口>/v1/chat/completions
 # 需要：网关开启 http.endpoints.chatCompletions + 端点公网可达 + basic auth（接线见 docs/SETUP.md）
 # 注：GitHub Actions 纯 Secrets 部署无需本段——设 NOTIFY_OPENCLAW_URL/USER/PASSWORD
 #     三个环境变量（Secrets）即可启用；本段用于本地 config.toml 场景或字段覆盖。
+# OpenClaw 明确没接单（401/403/连不上）时会自动改用 webhook_url 兜底投递；
+# 超时按"agent 可能仍在执行"处理，不再走 webhook，避免给你发两条重复告警。
 [notify.openclaw]
 url = "https://<你的域名或IP:端口>/v1/chat/completions"
 basic_user = "<bot用户名>"
@@ -82,4 +126,3 @@ model = "openclaw"              # 固定值：网关按 agent 路由到其配置
 article_ready_timeout = 60     # 等文章可访问的超时（秒）。裸 HTTP 必被 CSDN WAF 挡，真正的门禁在 Chrome 截图，无需设大
 http_timeout = 30              # 小请求（登录/查状态）超时（秒）；带截图的提交 POST 内部单独放宽到 90s
 # 另：ARTICLE_VISIBLE_TIMEOUT（仅环境变量，非本文件字段）= 截图前"等文章公开"的上限秒数，默认 720。
-

@@ -14,7 +14,7 @@ GitHub Actions 每天定时拉起本仓库的 Rust 二进制：登录云厂商�
 |---|---|
 | Git（已登录 GitHub） | `gh auth login` 或 credential manager / SSH key |
 | GitHub CLI（可选） | 装脚本/直传 Secrets 用；没有则全程网页手填 |
-| 云账号 | 阿贝云 / 三丰云 控制台账密 |
+| 云账号 | 阿贝云 / 三丰云 控制台账密（可配多台，例如 2 台三丰云 + 3 台阿贝云） |
 | 发文平台账号 | CSDN（需已开通博客）**或** 知乎（发帖正常的号） |
 | LLM API | 任何 OpenAI 兼容接口：base_url + key + model |
 | Rust 工具链 | 仅本地开发/测试需要；纯部署可跳过（Actions 远程构建） |
@@ -25,7 +25,7 @@ GitHub Actions 每天定时拉起本仓库的 Rust 二进制：登录云厂商�
 irm https://raw.githubusercontent.com/yangshu114514/free-renew/main/install.ps1 | iex
 ```
 
-向导按 6 步问答完成全部配置：仓库 fork/clone → 云账号 Secrets → LLM → **选发文平台并采集其 Cookie** → 通知 → 定时与首跑。约 5 分钟。
+向导按 6 步问答完成全部配置：仓库 fork/clone → 云账号 Secrets（**同一家可逐台录入多台**）→ LLM → **选发文平台并采集其 Cookie** → 通知 → 定时与首跑。约 5 分钟。
 
 下面手动流程与向导等价，供 Linux/macOS 或想逐步操作的人。
 
@@ -48,17 +48,46 @@ cd free-renew
 
 用 gh CLI（每条一个 Secret），或在 **Settings → Secrets and variables → Actions** 网页逐条添加。字段对照见 [config.example.toml](../config.example.toml)。
 
+**多台服务器**：第 1 台用无后缀变量名，第 2 台起加 `_2`、`_3`…… 程序按序号逐台串行续期。
+
 ```bash
+# 三丰云：第 1 台（与旧版部署完全一致）
 gh secret set SANFENGYUN_USERNAME --body "手机号"
 gh secret set SANFENGYUN_PASSWORD --body "密码"
+# 三丰云：第 2 台
+gh secret set SANFENGYUN_USERNAME_2 --body "手机号"
+gh secret set SANFENGYUN_PASSWORD_2 --body "密码"
+# 阿贝云：第 1、2、3 台
 gh secret set ABEIYUN_USERNAME    --body "手机号"
 gh secret set ABEIYUN_PASSWORD    --body "密码"
+gh secret set ABEIYUN_USERNAME_2  --body "手机号"
+gh secret set ABEIYUN_PASSWORD_2  --body "密码"
+gh secret set ABEIYUN_USERNAME_3  --body "手机号"
+gh secret set ABEIYUN_PASSWORD_3  --body "密码"
+
 gh secret set LLM_BASE_URL        --body "https://api.example.com/v1"
 gh secret set LLM_API_KEY         --body "sk-..."
 gh secret set LLM_MODEL           --body "模型名"
 ```
 
+可选（非敏感，放 **Variables** 即可）：
+
+```bash
+gh variable set SANFENGYUN_LABEL_2 --body "备用机"    # 通知/日志里显示为「三丰云(备用机)」
+gh variable set ABEIYUN_ENABLED_3  --body "false"     # 临时停用第 3 台，凭据留着
+```
+
+> ⚠️ **每加一台，都要在 `.github/workflows/renew.yml` 的 `env:` 段补一对 `_N` 行**
+> （第 1 台的无后缀行是现成的；第 2 台起预置到了 `_6`，加更多台照抄并改后缀即可）。
+> GitHub Actions 不接受通配符 Secrets，未在 env 里声明的编号变量程序读不到。
+> 未定义的 Secret 展开为空串，程序会跳过空槽位，不会报错。
+>
 > ⚠️ 用 gh 设 Secret 时，值必须用 `--body "实际值"` 直接给；`--body -` 会把 Secret 存成字面量 `-`（gh 只在完全不给 `--body` 时才读 stdin）。
+
+> 多账号的运行预算：账号之间是**串行**的，单台最坏 ≈25 分钟（登录/发文/提交的重试全打满）。
+> job 超时默认 180 分钟，够 ≈7 台最坏情况；更多台就加仓库 Variable
+> `RUN_TIMEOUT_MINUTES` 覆盖，公式 `账号数 × 25 + 30`（GitHub 单 job 硬上限 360）。
+> 定时任务之间会自动排队（`concurrency`），不会两轮重叠同时操作同一批账号。
 
 ### 3. 选发文平台（二选一，或两家都连）
 
@@ -125,9 +154,9 @@ gh variable set PLATFORM_FALLBACK --body "none"
 
 ### 5. 首跑验证
 
-知乎路线**强烈建议先探路**：Actions 页 Run workflow，`test_zhihu` 填 `三丰云`——只建草稿不发布，日志给出草稿编辑链接，你亲自核对内容质量与话题无误、且不触发验证码。确认干净后再正式用。
+知乎路线**强烈建议先探路**：Actions 页 Run workflow，`test_zhihu` 填账号 ID（如 `sanfengyun-1`；只有一个账号时填厂商名 `三丰云` 也行）——只建草稿不发布，日志给出草稿编辑链接，你亲自核对内容质量与话题无误、且不触发验证码。确认干净后再正式用。
 
-（想只看生成质量、连草稿都不建：`test_write` 填厂商名，样文打进日志。）
+（想只看生成质量、连草稿都不建：`test_write` 填账号 ID 或厂商名，样文打进日志。）
 
 两家都连的用户：`test_platforms` 填任意值——知乎与 CSDN 各发一篇**草稿**（全部停在公开发布前一步，不占发文额度），日志给出两条草稿链接，一次看清主/备两条链路是否都活着。验证后去平台侧把测试草稿删掉。
 
@@ -169,6 +198,10 @@ gh secret set NOTIFY_OPENCLAW_PASSWORD --body "bot密码"
 |---|---|---|
 | Actions 红叉但没收到通知 | 通知未配置/挂了 | 查 run-logs artifact 的 JSONL；补通知后重跑 |
 | 通知"发文失败 / 缺 _xsrf / 401" | 发文 Cookie 过期或没设对 | 重跑对应平台刷新脚本 |
+| 通知"发文失败"里出现 `[平台\|账号]` | 多账号时用来定位是哪台 | 前缀即账号展示名，如 `[csdn\|三丰云(备用)]` |
+| 某台从没出现在日志里 | 该台的编号变量没进 Actions env | 见「手动安装 §2」的提醒：每加一台都要在 renew.yml 的 env 段补 `_N` 行 |
+| 通知"未找到账号/匹配到 N 个账号" | 手动触发的 `submit_vendor` 用了厂商名而该厂商有多台 | 改用账号 ID（`sanfengyun-2`），run 日志的 `run.config` 事件里列出了所有可用 ID |
+| 关于某台的告警一条也没有 | 通知只配了一半 Secrets（如缺 NOTIFY_OPENCLAW_PASSWORD） | 日志里有一条 `OpenClaw 通知只配了一半，缺 …` 明确点名，补齐即可 |
 | 知乎通知 403 / 验证码 | 触发知乎风控 | 停手，人工登录知乎解除，勿自动重试 |
 | 知乎通知"挂话题失败/无安全匹配" | 话题名匹配不到或全带品牌名 | 换 `ZHIHU_TOPICS`（如"服务器"）；非致命，仍尝试发布 |
 | 通知"续期提交被拒" | 厂商人工审核未过 | 看 JSONL `raw` 厂商原话；多为内容问题，可换角度池 |
@@ -190,8 +223,11 @@ Actions 页 `Run workflow` 提供几个**诊断/恢复**输入框（都留空即
 |---|---|---|
 | `test_write` | 只生成样文打进日志，**不发文/不碰任何平台** | 想看/调 LLM 生成质量 |
 | `test_zhihu` | 真生成 + 在知乎**建草稿**（不发布），给编辑链接核对 | 上线前验鉴权/接口/话题/是否触发风控 |
+| `test_platforms` | 已配置的平台各发一篇草稿（停在发布前） | 巡检主/备两条发文链路 |
 | `test_screenshot_url` (+`_title`) | 只截图一个已发布 URL | 调截图/字体/标题匹配 |
 | `submit_existing` (+`submit_vendor`/`submit_title`) | **复用一篇已发布文章**，只做 截图→提交厂商，**绝不重发** | 发文成功但"上传截图到厂商"被网络抖动掐断时，专攻重试、不再往平台灌新文 |
+
+多账号场景下 `test_write` / `test_zhihu` / `submit_vendor` 这些"厂商"参数填**账号 ID**（`sanfengyun-1`、`abeiyun-3`，见 run 日志 `run.config` 事件里的清单）。填厂商名只在它唯一时可用；该厂商配了多台时会明确报错并列出可用 ID，绝不会替你猜一台。
 
 ### 内容安全红线（为什么有时"生成失败/放弃本轮"）
 
