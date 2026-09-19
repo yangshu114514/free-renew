@@ -79,41 +79,44 @@ fn target_profile(
 }
 
 fn test_notify(cfg: &AppConfig, run: &RunContext) -> Result<()> {
-    if cfg.notify.openclaw.is_none() && cfg.notify.webhook_url.is_empty() {
+    let has_pp = !cfg.notify.pushplus_token.trim().is_empty();
+    if cfg.notify.openclaw.is_none() && !has_pp && cfg.notify.webhook_url.is_empty() {
         run.event(
             "test_notify",
             "failed",
             json!({"reason": "no_notify_backend"}),
         );
         bail!(
-            "通知链路未配置。二选一：环境变量 NOTIFY_OPENCLAW_URL/USER/PASSWORD 三件套（或 NOTIFY_WEBHOOK_URL），\
-             或 config.toml 的 [notify.openclaw] / [notify].webhook_url"
+            "通知链路未配置。任选：环境变量 NOTIFY_OPENCLAW_URL/USER/PASSWORD 三件套、NOTIFY_PUSHPLUS_TOKEN、NOTIFY_WEBHOOK_URL，\
+             或 config.toml 的 [notify.openclaw] / [notify].pushplus_token / [notify].webhook_url"
         );
     }
-    let has_oc = cfg.notify.openclaw.is_some();
-    let backend_label = if has_oc {
-        "openclaw（网关 agent → 微信）"
-    } else {
-        "webhook"
-    };
-    let chain = if has_oc {
-        "本工具 → 网关 → agent → 微信"
-    } else {
-        "本工具 → webhook"
-    };
+    // 后端标签按 send() 的实际投递顺序拼（主 + 兜底），链路与之一致
+    let mut backends: Vec<String> = Vec::new();
+    if cfg.notify.openclaw.is_some() {
+        backends.push("openclaw（网关 agent → 微信）".into());
+    }
+    if has_pp {
+        backends.push("pushplus（公网 API → 微信）".into());
+    }
+    if !cfg.notify.webhook_url.is_empty() {
+        backends.push("webhook".into());
+    }
+    let backend_label = backends.join(" → ");
     let detail = format!(
-        "通知后端: {}\n本轮为人工触发测试，非真实续期。你看到这条消息说明: {} 全链路可用。",
-        backend_label, chain
+        "通知后端: {backend_label}\n本轮为人工触发测试，非真实续期。你看到这条消息说明: 本工具 → {backend_label} 至少一条链路全通（按序首个送达即停）。"
     );
     notify::send(&cfg.notify, "free-renew 通知链路自检", &detail);
     run.event(
         "test_notify",
         "ok",
-        json!({ "backend": if has_oc { "openclaw" } else { "webhook" } }),
+        json!({ "backend": if cfg.notify.openclaw.is_some() { "openclaw" }
+                else if has_pp { "pushplus" }
+                else { "webhook" } }),
     );
     println!(
         "通知已投递（fire-and-forget），到你的 {} 查收。",
-        if has_oc {
+        if cfg.notify.openclaw.is_some() || has_pp {
             "微信"
         } else {
             "webhook 接收端"

@@ -1,14 +1,14 @@
 //! 通知：失败/成功投递到用户。绝不 panic——通知是尽力而为，不能反过来弄死主流程。
 //!
-//! 双后端：
+//! 三后端，按序主 + 兜底（第一个送达即停，避免重复告警）：
 //! 1. `openclaw`（推荐）：POST 网关 chatCompletions → agent → 微信消息工具。
 //!    fire-and-forget 语义：agent 在服务端异步执行，客户端超时/5xx 都不影响送达
 //!    （实测网关侧 100s 超时后 agent 仍完成投递）。
-//! 2. `webhook`：通用 JSON POST（{"tag","title","detail"}）。
-//!
-//! 两者的关系是**主 + 兜底**：openclaw 明确没接单（鉴权失败/连不上/缺配置）时
-//! 才走 webhook。原来只要 openclaw 是 Some 就直接 return，webhook 永远不被尝试，
-//! 也不留一行日志——同时配了两套的用户并不知道自己只有一套在工作。
+//!    ⚠️ 网关走 Cloudflare 橙云时，GitHub runner（数据中心 IP）的请求会被 CF 边缘
+//!    managed challenge 拦成 403（请求根本到不了源站）——此时本会静默，由下面兜底。
+//! 2. `pushplus`：POST pushplus.plus 公网 API 推微信（不经过 CF，GHA 可达；
+//!    免费层每日 200 条，失败告警频率远低于此）。
+//! 3. `webhook`：通用 JSON POST（{"tag","title","detail"}）。
 //!
 //! 投递指令模板让 agent「立即用微信消息工具发送」，与心跳的"自主判断是否打扰"
 //! 哲学不同——告警/回执是明确指令，不需要它判断值不值得。
@@ -23,6 +23,8 @@ use crate::http::truncate_chars;
 
 /// openclaw 后端超时：够发出请求即可，agent 在服务端异步跑完。
 const OPENCLAW_TIMEOUT_SECS: u64 = 30;
+/// pushplus 后端超时（同步等应答，code=200 才算送达）。
+const PUSHPLUS_TIMEOUT_SECS: u64 = 15;
 /// webhook 后端超时。
 const WEBHOOK_TIMEOUT_SECS: u64 = 15;
 /// 进日志的通知正文预览长度（防 Actions 日志爆量）。
@@ -31,8 +33,15 @@ const LOG_PREVIEW_CHARS: usize = 500;
 const OPENCLAW_DETAIL_CHARS: usize = 1200;
 /// 发给通用 webhook 的正文上限。
 const WEBHOOK_DETAIL_CHARS: usize = 2000;
+/// 发给 pushplus 的正文上限（免费层消息长度有限，截断保标题完整）。
+const PUSHPLUS_DETAIL_CHARS: usize = 2000;
+/// pushplus 官方 API（公网直发，不经过 CF 边缘——GHA 出口 IP 不会被 challenge）。
+const PUSHPLUS_API: &str = "https://www.pushplus.plus/send/";
 
 /// 发送通知。任何错误只记日志，绝不向上传播。
+///
+/// 顺序：openclaw → pushplus → webhook。第一个"已送达"的即停——
+/// 兜底通道全都能发就重复刷屏，比漏发更烦人。
 pub fn send(cfg: &NotifyConfig, title: &str, detail: &str) {
     tracing::warn!(
         "[notify] {title} | {}",
@@ -43,16 +52,24 @@ pub fn send(cfg: &NotifyConfig, title: &str, detail: &str) {
     if let Some(oc) = &cfg.openclaw {
         delivered = send_openclaw(oc, title, detail);
     }
+    if !delivered && !cfg.pushplus_token.trim().is_empty() {
+        if cfg.openclaw.is_some() {
+            tracing::warn!("[notify] 改用 pushplus 兜底投递");
+        }
+        delivered = send_pushplus(&cfg.pushplus_token, title, detail);
+    }
     if delivered {
         return;
     }
     if cfg.webhook_url.is_empty() {
-        if cfg.openclaw.is_some() {
-            tracing::error!("[notify] openclaw 未送达且没有 webhook 兜底——这条通知发不出去");
+        if cfg.openclaw.is_some() || !cfg.pushplus_token.trim().is_empty() {
+            tracing::error!(
+                "[notify] openclaw/pushplus 未送达且没有 webhook 兜底——这条通知发不出去"
+            );
         }
         return;
     }
-    if cfg.openclaw.is_some() {
+    if cfg.openclaw.is_some() || !cfg.pushplus_token.trim().is_empty() {
         tracing::warn!("[notify] 改用 webhook 兜底投递");
     }
     send_webhook(cfg, title, detail);
@@ -164,6 +181,59 @@ fn send_openclaw(oc: &OpenClawNotify, title: &str, detail: &str) -> bool {
                 tracing::error!("[notify] openclaw 投递失败 {e}");
                 false
             }
+        }
+    }
+}
+
+/// PushPlus 后端：同步等应答，HTTP 2xx 且响应 `code == 200` 才算送达。
+/// 返回 true = 已交给 pushplus（不再走 webhook，防重复告警）。
+fn send_pushplus(token: &str, title: &str, detail: &str) -> bool {
+    let content = truncate_chars(detail, PUSHPLUS_DETAIL_CHARS)
+        // pushplus 微信模板默认 html：\n 不换行，必须转 <br/>（与 site-watchdog 同样的手法）
+        .replace('\n', "<br/>");
+    let payload = json!({
+        "token": token,
+        "title": truncate_chars(title, 50),
+        "content": content,
+        "template": "html",
+    });
+    let Some(client) = http_client(PUSHPLUS_TIMEOUT_SECS) else {
+        return false;
+    };
+    match client.post(PUSHPLUS_API).json(&payload).send() {
+        Ok(resp) => {
+            let status = resp.status();
+            if !status.is_success() {
+                tracing::error!(
+                    "[notify] pushplus HTTP {status}——通知未送达（token 错误或网络问题）"
+                );
+                return false;
+            }
+            // 官方应答 {"code":200,"message":"success"}；code=900 = 账号使用受限（超每日限额）
+            match resp.json::<serde_json::Value>() {
+                Ok(body) => {
+                    let code = body.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+                    if code == 200 {
+                        tracing::info!("[notify] pushplus 已接单（code=200，送达以微信为准）");
+                        true
+                    } else {
+                        let message = body.get("message").and_then(|v| v.as_str()).unwrap_or("?");
+                        tracing::error!(
+                            "[notify] pushplus 拒绝 code={code} ({message})——\
+                             900=超免费层每日 200 条限额或账号受限，通知未送达"
+                        );
+                        false
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("[notify] pushplus 应答解析失败 {e}——通知未送达");
+                    false
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("[notify] pushplus 投递失败 {e}（忽略，不影响主流程）");
+            false
         }
     }
 }
