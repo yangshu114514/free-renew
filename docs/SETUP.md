@@ -149,9 +149,13 @@ gh variable set PLATFORM_FALLBACK --body "none"
 
 ### 4. 通知（可选，强烈建议）
 
-没有通知 = 出事你不知道。二选一：
+没有通知 = 出事你不知道。按场景选（可叠加，投递顺序 OpenClaw → PushPlus → 通用 Webhook，第一个送达即停）：
 
 - **OpenClaw → 微信**（你有一台跑 OpenClaw 的服务器）：见下节。
+  ⚠️ 网关走 Cloudflare 橙云时，GitHub runner（数据中心出口 IP）的请求会被 CF 边缘
+  拦成 403（请求到不了源站，日志只显示"openclaw 网关 403"）——此时靠下面任一兜底。
+- **PushPlus → 微信**（最省事的兜底，推荐与 OpenClaw 叠加）：`gh secret set NOTIFY_PUSHPLUS_TOKEN --body "<pushplus.plus 的个人token>"`。
+  pushplus 是公网直连 API，不经过 CF，GHA 出口永远可达；免费层每日 200 条，告警频率远低于此。
 - **通用 Webhook**（Server酱 / 企业微信机器人 / Bark…）：`gh secret set NOTIFY_WEBHOOK_URL --body "https://…"`
 
 > ⚠️ webhook 后端的 Secret 必须能在工作流里透传才生效。`renew.yml` 的 `env:` 段里
