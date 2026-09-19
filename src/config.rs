@@ -111,6 +111,7 @@ pub const ENV_KEYS: &[&str] = &[
     "NOTIFY_OPENCLAW_USER",
     "NOTIFY_OPENCLAW_PASSWORD",
     "NOTIFY_OPENCLAW_MODEL",
+    "NOTIFY_PUSHPLUS_TOKEN",
     "NOTIFY_WEBHOOK_URL",
     "NOTIFY_TAG",
     // 限额
@@ -262,12 +263,26 @@ impl std::fmt::Debug for ZhihuConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct NotifyConfig {
     pub webhook_url: String,
     pub tag: String,
-    /// OpenClaw 后端（Some 时优先，失败会再试 webhook 兜底）
+    /// OpenClaw 后端（Some 时优先，失败会再试 pushplus/webhook 兜底）
     pub openclaw: Option<OpenClawNotify>,
+    /// PushPlus 后端（免费层每日 200 条；GHA 直发公网 API 可达，不经过 CF）
+    pub pushplus_token: String,
+}
+
+/// 手写 Debug：token 会随 `{cfg:?}` 进 JSONL 日志工件（与 CloudAccount 同一个坑），必须遮掉。
+impl std::fmt::Debug for NotifyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotifyConfig")
+            .field("webhook_url", &self.webhook_url)
+            .field("tag", &self.tag)
+            .field("openclaw", &self.openclaw)
+            .field("pushplus_token", &redact(&self.pushplus_token))
+            .finish()
+    }
 }
 
 #[derive(Clone)]
@@ -709,6 +724,10 @@ fn load_notify(file: Option<&FileConfig>, env: &EnvMap) -> NotifyConfig {
         // 只给 webhook_url 留 env 通道会让这里的优先级约定自相矛盾
         tag: env.get("NOTIFY_TAG").cloned().unwrap_or(section.tag),
         openclaw: load_openclaw(section.openclaw.as_ref(), env),
+        pushplus_token: env
+            .get("NOTIFY_PUSHPLUS_TOKEN")
+            .cloned()
+            .unwrap_or(section.pushplus_token),
     }
 }
 
@@ -1146,6 +1165,7 @@ password = "p5"
                 webhook_url: String::new(),
                 tag: "renewal".into(),
                 openclaw: None,
+                pushplus_token: String::new(),
             },
             article_ready_timeout: 1,
             http_timeout: 1,

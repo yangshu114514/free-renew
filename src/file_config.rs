@@ -201,6 +201,11 @@ pub struct NotifySection {
     /// OpenClaw 通知后端：配置后走网关 chatCompletions → agent → 微信
     #[serde(default)]
     pub openclaw: Option<OpenClawNotifyConfig>,
+    /// PushPlus 后端：填 token 后走 pushplus.plus 公网 API 推微信
+    ///（免费层每日 200 条）。GitHub runner 出口 IP 会被 Cloudflare 边缘拦，
+    /// 自建网关走 CF 域名时通知 403，pushplus 不经过 CF，是可靠的兜底通道
+    #[serde(default)]
+    pub pushplus_token: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

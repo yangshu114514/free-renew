@@ -203,6 +203,10 @@ jobs:
       NOTIFY_OPENCLAW_PASSWORD: ${{ secrets.NOTIFY_OPENCLAW_PASSWORD }}
       # 网关侧模型名（默认 openclaw；网关按 agentId 路由，一般不用改）
       NOTIFY_OPENCLAW_MODEL: ${{ vars.NOTIFY_OPENCLAW_MODEL }}
+      # PushPlus 兜底通道：填 token（Secrets）后，openclaw 未送达时自动改走 pushplus 推微信。
+      # GHA 出口 IP 被 Cloudflare 边缘拦 403 时（自建网关走 CF 橙云即此症状），这是可靠兜底；
+      # pushplus.plus 是公网直连，不经过 CF。免费层每日 200 条，告警场景绰绰有余。
+      NOTIFY_PUSHPLUS_TOKEN: ${{ secrets.NOTIFY_PUSHPLUS_TOKEN }}
       # 通用 webhook 后端（install.ps1 选"通用 Webhook"时会写这个 Secret）。
       # ⚠️ 这一行曾经漏了：Secret 写了、env 没透传，程序根本读不到——
       #    选 webhook 的用户一条通知都收不到，而且全程没有任何报错。

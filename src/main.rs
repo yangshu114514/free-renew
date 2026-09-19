@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use cloud::RenewState;
-use config::{AppConfig, CloudAccount};
+use config::{AppConfig, CloudAccount, NotifyConfig};
 use serde_json::json;
 
 /// 单个账号的续期结果。
@@ -721,6 +721,26 @@ fn loggable_args(args: &[String]) -> Vec<String> {
     out
 }
 
+/// run.config 事件的 notify_backend 字段：按实际投递顺序（openclaw → pushplus →
+/// webhook）列出已配置的后端，全空则是 "none"。与 notify::send 的顺序一致。
+fn notify_backend_label(notify: &NotifyConfig) -> String {
+    let mut backends: Vec<&str> = Vec::new();
+    if notify.openclaw.is_some() {
+        backends.push("openclaw");
+    }
+    if !notify.pushplus_token.trim().is_empty() {
+        backends.push("pushplus");
+    }
+    if !notify.webhook_url.is_empty() {
+        backends.push("webhook");
+    }
+    if backends.is_empty() {
+        "none".to_string()
+    } else {
+        backends.join("+")
+    }
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -777,9 +797,7 @@ fn main() -> Result<()> {
             "provider": cfg.platform_provider.clone(),
             "csdn_ready": cfg.csdn.as_ref().map(|c| c.ready()).unwrap_or(false),
             "zhihu_ready": cfg.zhihu.as_ref().map(|z| z.ready()).unwrap_or(false),
-            "notify_backend": if cfg.notify.openclaw.is_some() { "openclaw" }
-                else if !cfg.notify.webhook_url.is_empty() { "webhook" }
-                else { "none" },
+            "notify_backend": notify_backend_label(&cfg.notify),
             // 本次真正传进来的可选项环境变量名（只有名字，没有值）。
             // 排障"我明明配了 X 却没生效"最快的一眼：变量没出现在这里，
             // 就是它在工作流里没被透传（Actions 最常见的原因是 env 段少一行）。
@@ -864,6 +882,7 @@ mod tests {
                 webhook_url: String::new(),
                 tag: String::new(),
                 openclaw: None,
+                pushplus_token: String::new(),
             },
             article_ready_timeout: 1,
             http_timeout: 1,
