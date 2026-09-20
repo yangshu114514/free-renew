@@ -216,6 +216,10 @@ jobs:
       NOTIFY_TAG: ${{ vars.NOTIFY_TAG }}
       # ── 可选调优（留空即用内置默认；都是 Variable，非敏感）────────────
       LLM_TIMEOUT: ${{ vars.LLM_TIMEOUT }}                       # 单次生成超时秒数，默认 120
+      # 文章生成总次数（含重写重试）。GHA 没这个值时程序端只有 1 次机会——单次不过
+      # 合规校验就放弃整轮，CanRenew 窗口内连续失手会拖到机器回收（2026-09-20 阿贝云
+      # 事故）。默认 3；想更激进设仓库 Variable AI_MAX_RETRIES 覆盖。
+      AI_MAX_RETRIES: ${{ vars.AI_MAX_RETRIES || '3' }}
       ARTICLE_READY_TIMEOUT: ${{ vars.ARTICLE_READY_TIMEOUT }}   # 裸 HTTP 就绪探测，默认 60
       ARTICLE_VISIBLE_TIMEOUT: ${{ vars.ARTICLE_VISIBLE_TIMEOUT }} # 等文章公开上限，默认 720
       HTTP_TIMEOUT: ${{ vars.HTTP_TIMEOUT }}                     # 厂商小请求超时，默认 30
