@@ -100,6 +100,7 @@ pub const ENV_KEYS: &[&str] = &[
     "LLM_API_KEY",
     "LLM_MODEL",
     "LLM_TIMEOUT",
+    "AI_MAX_RETRIES",
     // 发文平台
     "PLATFORM_PROVIDER",
     "PLATFORM_FALLBACK",
@@ -578,7 +579,10 @@ fn load_llm(file: Option<&FileConfig>, env: &EnvMap) -> Option<LlmConfig> {
         lengths: or_default(&ai.lengths, crate::writer::DEFAULT_LENGTHS),
         forbidden_words: or_default(&ai.forbidden_words, &crate::writer::default_forbidden()),
         required_keywords: or_default(&ai.required_keywords, &crate::writer::default_keywords()),
-        max_retries: ai.max_retries.max(1),
+        // 生成总次数（至少跑 1 次）。env AI_MAX_RETRIES 优先：GHA 纯 Secrets 部署没有
+        // config.toml，ai.max_retries 恒为默认 0（clamp 到 1），单次生成不过合规就直接
+        // 放弃整轮——2026-09-20 阿贝云 CanRenew 窗口内就栽在这。工作流默认给 3。
+        max_retries: env_u64(env, "AI_MAX_RETRIES", ai.max_retries.max(1) as u64) as u32,
         timeout_secs: env_u64(env, "LLM_TIMEOUT", crate::writer::LLM_REQUEST_TIMEOUT_SECS),
         temperature: ai.temperature.unwrap_or_else(default_temperature),
         disable_thinking: ai.disable_thinking,

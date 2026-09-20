@@ -552,6 +552,7 @@ pub fn generate_article(llm: &LlmConfig, profile: &CloudProfile) -> Result<Artic
     let mut personas: Vec<&(&str, &str)> = PERSONA_SEEDS.iter().collect();
     personas.shuffle(&mut rng);
 
+    let mut last_problems: Vec<String> = vec![];
     for attempt in 0..llm.max_retries as usize {
         let angle = llm
             .angles
@@ -643,6 +644,7 @@ pub fn generate_article(llm: &LlmConfig, profile: &CloudProfile) -> Result<Artic
         // 累积问题清单喂回下一轮（只记问题，不记旧正文，避免人设串味）。
         // 去重必须用 contains：dedup() 只合并**相邻**重复，而新问题恒追加在末尾，
         // 原写法实际是恒不生效的空操作。
+        last_problems = problems.clone();
         let feedback = problems.join("；");
         if !retry_feedback.contains(&feedback) {
             retry_feedback.push(feedback);
@@ -652,6 +654,14 @@ pub fn generate_article(llm: &LlmConfig, profile: &CloudProfile) -> Result<Artic
         }
     }
 
+    // 放弃前把上一轮的具体问题打出来——"不合规"三个字进日志毫无排障价值，
+    // 用户面对一整屏 ERROR 却不知道是哪条校验规则挡了路（2026-09-20 阿贝云事故的直接教训）
+    if !last_problems.is_empty() {
+        tracing::warn!(
+            "文章生成放弃时最后一轮校验问题: {}",
+            last_problems.join("；")
+        );
+    }
     bail!(
         "生成文章 {} 次仍不合规，放弃本次（宁缺毋滥，不做垃圾提交）",
         llm.max_retries
