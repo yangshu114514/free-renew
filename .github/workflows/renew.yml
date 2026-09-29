@@ -199,7 +199,8 @@ jobs:
       ZHIHU_TOPICS: ${{ vars.ZHIHU_TOPICS }}
       # ── 通知 ──────────────────────────────────────────────────────────
       # 走 SSH 隧道直连服务器 openresty（上方 "Setup SSH tunnel" step 建立；绕开 CF challenge）
-      NOTIFY_OPENCLAW_URL: http://127.0.0.1:18081/v1/chat/completions
+      # /tools/invoke = 网关工具直调端点（不经 LLM agent，同步返回 deliveryStatus）
+      NOTIFY_OPENCLAW_URL: http://127.0.0.1:18081/tools/invoke
       NOTIFY_OPENCLAW_USER: ${{ secrets.NOTIFY_OPENCLAW_USER }}
       NOTIFY_OPENCLAW_PASSWORD: ${{ secrets.NOTIFY_OPENCLAW_PASSWORD }}
       NOTIFY_OPENCLAW_ENABLED: ${{ secrets.NOTIFY_OPENCLAW_ENABLED || 'true' }}

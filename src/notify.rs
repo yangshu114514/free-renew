@@ -21,13 +21,13 @@ use serde_json::json;
 use crate::config::{NotifyConfig, OpenClawNotify};
 use crate::http::truncate_chars;
 
-/// openclaw 后端超时。
-/// 2026-09-29 实测修正：网关并非"客户端断开后异步跑完"——HTTP 客户端一断开
-/// agent run 立即被 caller_signal_aborted 中止（docker logs 实锤），而完整
-/// 一轮 agent（工具目录化 ~6s + 5~8 轮模型调用 + 重试）远超 30s，
-/// 30s 超时等于每条通知都中途掐死、message 从不执行。
-/// 拉长到 180s：等 agent 完整跑完拿到真实 200（"已送达"而非"可能已接单"）。
-const OPENCLAW_TIMEOUT_SECS: u64 = 180;
+/// openclaw 后端超时：2026-09-29 起走 /tools/invoke 工具直调（不经 LLM agent），
+/// 同步秒级返回 deliveryStatus，30s 足够覆盖微信通道发送。
+const OPENCLAW_TIMEOUT_SECS: u64 = 30;
+/// free-renew 通知的微信绑定目标：裸 "<id>@im.wechat" 是唯一合法格式
+/// （加 user: 前缀 ret=-3、残缺 ID 也 ret=-3——2026-09-09 实测）。
+/// 与 sf-monitor Worker 告警用同一绑定 ID（该 ID 亦存于 agent 记忆）；改绑定时两处同步。
+const OPENCLAW_WECHAT_TARGET: &str = "REDACTED_WECHAT_TARGET";
 /// pushplus 后端超时（同步等应答，code=200 才算送达）。
 const PUSHPLUS_TIMEOUT_SECS: u64 = 15;
 /// webhook 后端超时。
@@ -124,27 +124,26 @@ fn send_openclaw(oc: &OpenClawNotify, title: &str, detail: &str) -> bool {
         return false;
     }
 
-    // 指令化消息体（2026-09-09 实测调优）：
-    //
-    // message 工具 send 动作的 target 规则（微信通道实测）：
-    //   * 不给 target                 → "Action send requires a target"
-    //   * 给备注名/普通文本 ID         → "Unknown target"
-    //   * 给 "@im.wechat"（残缺）      → sendMessage ret=-3 invalid arguments
-    //   * 给 "user:<id>@im.wechat"    → ret=-3 invalid arguments（不能加前缀！）
-    //   * 给裸 "<id>@im.wechat"       → ✅ 必成功
-    //
-    // target 是微信用户绑定 ID（每人固定）。本指令不硬编码任何具体 target，
-    // 而是让 agent 用其记忆中「上次成功发送 free-renew 消息的 target」——
-    // 首次部署前先给 agent 手动发一条测试消息，让该 target 进入记忆即可。
-    let instruction = format!(
-        "自动化告警,最高优先级。用 message 工具 send 动作(channel=openclaw-weixin, target=你记忆中上次成功发送 free-renew 消息的完整裸 @im.wechat ID,严禁加 user: 前缀)给微信发消息,内容:\n【{title}】\n{detail}\n发送成功只回复:已发送。若 ret=-3 则去掉前缀重试,若 Unknown target 则用记忆中上次成功的 target 重试。",
+    // 2026-09-29 改为 POST /tools/invoke 直调 message 工具（网关文档
+    // docs.openclaw.ai/gateway/tools-invoke-http-api）：
+    //   * 旧路径 /v1/chat/completions 让 agent 自己决定调不调工具——实测弱模型
+    //     经常只回文本指导不执行，且 agent 全程 60-90s、客户端一断就中止；
+    //   * 工具直调不经 LLM：秒回、必达、不烧 token，响应体带 deliveryStatus=sent。
+    //   * 鉴权走现有隧道链（GHA ssh -L → nginx basic → 网关 trusted-proxy 身份头）。
+    let text = format!(
+        "【{title}】\n{detail}",
         title = title,
         detail = truncate_chars(detail, OPENCLAW_DETAIL_CHARS),
     );
     let payload = json!({
-        "model": oc.model,
-        "messages": [{"role": "user", "content": instruction}],
-        "max_tokens": 300,
+        "tool": "message",
+        "action": "send",
+        "args": {
+            "channel": "openclaw-weixin",
+            "target": OPENCLAW_WECHAT_TARGET,
+            "text": text,
+        },
+        "sessionKey": "main",
     });
 
     let Some(client) = http_client(OPENCLAW_TIMEOUT_SECS) else {
@@ -163,39 +162,24 @@ fn send_openclaw(oc: &OpenClawNotify, title: &str, detail: &str) -> bool {
     match result {
         Ok(resp) => {
             let status = resp.status();
-            if status.is_success() {
-                tracing::info!(
-                    "[notify] openclaw 后端 HTTP {status}（agent 异步执行，送达以微信为准）"
-                );
+            let body = resp.text().unwrap_or_default();
+            if status.is_success() && body.contains("\"ok\":true") {
+                tracing::info!("[notify] openclaw 工具直调送达（/tools/invoke deliveryStatus=sent）");
                 true
-            } else if matches!(status.as_u16(), 401 | 403) {
-                // 401/403 = 网关在鉴权层就拒了，agent 没接单，这条告警**没送达**。
-                // 别用"异步执行"话术掩盖——明确报错，用户必须修 Secrets 凭据
+            } else {
+                // 工具直调是同步语义：401/403=鉴权或策略拒、400=参数错、404=工具未放行、
+                // 5xx=执行错——没有"agent 可能已接单"的模糊地带，一律未送达走兜底。
                 tracing::error!(
-                    "[notify] openclaw 网关 {status}：NOTIFY_OPENCLAW_USER/PASSWORD 与网关 basic auth 不符\
-                     （或网关拒绝该来源），通知未送达（去仓库 Settings→Secrets 核对，网关侧查 htpasswd/防火墙）"
+                    "[notify] openclaw /tools/invoke 未送达 HTTP {status}: {}（转 pushplus 兜底）",
+                    body.chars().take(200).collect::<String>()
                 );
                 false
-            } else {
-                // 4xx/5xx 超时类：agent 可能已接单（fire-and-forget），只记日志
-                tracing::warn!(
-                    "[notify] openclaw 后端 HTTP {status}（agent 可能已接单，送达以微信为准）"
-                );
-                true
             }
         }
         Err(e) => {
-            if e.is_timeout() {
-                // 超时按"可能已接单"处理（实测网关侧执行完仍会送达）。
-                // 再走 webhook 会给用户发第二条重复告警，比漏发更烦人。
-                tracing::error!(
-                    "[notify] openclaw 投递超时 {e}（agent 可能仍在执行，不再走 webhook 以免重复告警）"
-                );
-                true
-            } else {
-                tracing::error!("[notify] openclaw 投递失败 {e}");
-                false
-            }
+            // 同步语义：没拿到响应就没有送达凭证，交兜底通道而不是假装成功
+            tracing::error!("[notify] openclaw 工具直调失败 {e}（转 pushplus 兜底）");
+            false
         }
     }
 }
