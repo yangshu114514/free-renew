@@ -29,6 +29,9 @@ jobs:
           echo "--- body(600) ---"; head -c 600 /tmp/b2.txt; echo ""
           echo "=== C. baseline GET /cdn-cgi/trace ==="
           curl -s -m 15 https://REDACTED_GATEWAY_DOMAIN/cdn-cgi/trace | head -20
+          echo "=== D. git skip-rule path (control) ==="
+          curl -s -o /tmp/b4.txt -w "status:%{http_code}\n" -m 15 "https://git.REDACTED_GATEWAY_DOMAIN/kb.git/info/refs?service=git-upload-pack"
+          echo "--- body(300) ---"; head -c 300 /tmp/b4.txt; echo ""
 
       - name: vendor API reachability (sanfengyun IP-ban check)
         run: |
