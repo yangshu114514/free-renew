@@ -201,6 +201,7 @@ jobs:
       NOTIFY_OPENCLAW_URL: ${{ secrets.NOTIFY_OPENCLAW_URL }}
       NOTIFY_OPENCLAW_USER: ${{ secrets.NOTIFY_OPENCLAW_USER }}
       NOTIFY_OPENCLAW_PASSWORD: ${{ secrets.NOTIFY_OPENCLAW_PASSWORD }}
+      NOTIFY_OPENCLAW_ENABLED: ${{ secrets.NOTIFY_OPENCLAW_ENABLED || 'true' }}
       # 网关侧模型名（默认 openclaw；网关按 agentId 路由，一般不用改）
       NOTIFY_OPENCLAW_MODEL: ${{ vars.NOTIFY_OPENCLAW_MODEL }}
       # PushPlus 兜底通道：填 token（Secrets）后，openclaw 未送达时自动改走 pushplus 推微信。
