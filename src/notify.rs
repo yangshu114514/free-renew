@@ -49,11 +49,21 @@ pub fn send(cfg: &NotifyConfig, title: &str, detail: &str) {
     );
 
     let mut delivered = false;
+    // openclaw 后端可被 NOTIFY_OPENCLAW_ENABLED=false 停用（Secrets 控制，默认开）：
+    // 网关链路长期 403 时停用，避免每次告警都白白消耗一次 pushplus 兜底名额。
+    let openclaw_enabled = std::env::var("NOTIFY_OPENCLAW_ENABLED")
+        .ok()
+        .map(|v| !v.trim().is_empty() && v.trim().to_ascii_lowercase() != "false")
+        .unwrap_or(true);
     if let Some(oc) = &cfg.openclaw {
-        delivered = send_openclaw(oc, title, detail);
+        if !openclaw_enabled {
+            tracing::warn!("[notify] openclaw 后端已停用（NOTIFY_OPENCLAW_ENABLED=false），直接走 pushplus 兜底");
+        } else {
+            delivered = send_openclaw(oc, title, detail);
+        }
     }
     if !delivered && !cfg.pushplus_token.trim().is_empty() {
-        if cfg.openclaw.is_some() {
+        if openclaw_enabled && cfg.openclaw.is_some() {
             tracing::warn!("[notify] 改用 pushplus 兜底投递");
         }
         delivered = send_pushplus(&cfg.pushplus_token, title, detail);

@@ -80,6 +80,10 @@ fn target_profile(
 
 fn test_notify(cfg: &AppConfig, run: &RunContext) -> Result<()> {
     let has_pp = !cfg.notify.pushplus_token.trim().is_empty();
+    let openclaw_enabled = std::env::var("NOTIFY_OPENCLAW_ENABLED")
+        .ok()
+        .map(|v| !v.trim().is_empty() && v.trim().to_ascii_lowercase() != "false")
+        .unwrap_or(true);
     if cfg.notify.openclaw.is_none() && !has_pp && cfg.notify.webhook_url.is_empty() {
         run.event(
             "test_notify",
@@ -93,7 +97,7 @@ fn test_notify(cfg: &AppConfig, run: &RunContext) -> Result<()> {
     }
     // 后端标签按 send() 的实际投递顺序拼（主 + 兜底），链路与之一致
     let mut backends: Vec<String> = Vec::new();
-    if cfg.notify.openclaw.is_some() {
+    if cfg.notify.openclaw.is_some() && openclaw_enabled {
         backends.push("openclaw（网关 agent → 微信）".into());
     }
     if has_pp {
@@ -110,7 +114,7 @@ fn test_notify(cfg: &AppConfig, run: &RunContext) -> Result<()> {
     run.event(
         "test_notify",
         "ok",
-        json!({ "backend": if cfg.notify.openclaw.is_some() { "openclaw" }
+        json!({ "backend": if cfg.notify.openclaw.is_some() && openclaw_enabled { "openclaw" }
                 else if has_pp { "pushplus" }
                 else { "webhook" } }),
     );
