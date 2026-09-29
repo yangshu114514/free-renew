@@ -18,12 +18,11 @@ jobs:
           CF_API_TOKEN: ${{ secrets.CF_DEPLOY_TOKEN }}
           CF_ACCOUNT_ID: REDACTED_CF_ACCOUNT_ID
         run: |
-          jq -n '{main_file:"worker.js",compatibility_date:"2026-09-01",triggers:{crons:["*/10 * * * *"]}}' > /tmp/meta.json
           code=$(curl -sS -o /tmp/resp.json -w "%{http_code}" -X PUT \
             "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/sf-monitor" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
-            -F "metadata=@/tmp/meta.json;type=application/json" \
-            -F "worker.js=@ops/sf-monitor.js;type=application/javascript")
+            -H "Content-Type: application/javascript" \
+            --data-binary @ops/sf-monitor.js)
           echo "HTTP $code"
           head -c 1500 /tmp/resp.json
           echo ""
