@@ -21,8 +21,13 @@ use serde_json::json;
 use crate::config::{NotifyConfig, OpenClawNotify};
 use crate::http::truncate_chars;
 
-/// openclaw 后端超时：够发出请求即可，agent 在服务端异步跑完。
-const OPENCLAW_TIMEOUT_SECS: u64 = 30;
+/// openclaw 后端超时。
+/// 2026-09-29 实测修正：网关并非"客户端断开后异步跑完"——HTTP 客户端一断开
+/// agent run 立即被 caller_signal_aborted 中止（docker logs 实锤），而完整
+/// 一轮 agent（工具目录化 ~6s + 5~8 轮模型调用 + 重试）远超 30s，
+/// 30s 超时等于每条通知都中途掐死、message 从不执行。
+/// 拉长到 180s：等 agent 完整跑完拿到真实 200（"已送达"而非"可能已接单"）。
+const OPENCLAW_TIMEOUT_SECS: u64 = 180;
 /// pushplus 后端超时（同步等应答，code=200 才算送达）。
 const PUSHPLUS_TIMEOUT_SECS: u64 = 15;
 /// webhook 后端超时。
