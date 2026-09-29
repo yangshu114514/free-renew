@@ -91,37 +91,10 @@ async function monitor(env, force) {
 
 self.addEventListener("fetch", event => {
   event.respondWith((async req => {
-    const at = req.headers.get("Authorization") || ""
-    const u = new URL(req.url)
-    // /oc: GHA → CF Worker → 网关 中转（绕开 CF 对数据中心 IP 的 managed challenge）
-    // 鉴权与网关同一套 Basic(freerenew:OC_PASS)，Worker 验一次、网关再验一次
-    if (u.pathname === "/oc") {
-      const cors = {
-        "access-control-allow-origin": "*",
-        "access-control-allow-methods": "POST, OPTIONS",
-        "access-control-allow-headers": "Authorization, Content-Type"
-      }
-      if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors })
-      const expect = "Basic " + btoa((globalThis.OC_USER || "freerenew") + ":" + (globalThis.OC_PASS || ""))
-      if (at !== expect) return new Response("unauthorized", { status: 401, headers: cors })
-      if (req.method !== "POST") return new Response("POST only", { status: 405, headers: cors })
-      try {
-        const body = await req.text()
-        const ctl = new AbortController()
-        const timer = setTimeout(() => ctl.abort(), 90000)
-        const r = await fetch("https://REDACTED_GATEWAY_DOMAIN/v1/chat/completions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": at },
-          body, redirect: "follow", signal: ctl.signal
-        }).finally(() => clearTimeout(timer))
-        const txt = await r.text()
-        return new Response(txt, { status: r.status, headers: { "content-type": "application/json", ...cors } })
-      } catch (e) {
-        return new Response("gateway fetch error: " + String(e).slice(0, 200), { status: 502, headers: cors })
-      }
-    }
     // 公网入口鉴权: 所有 HTTP 路径要求 Authorization: Bearer <AUTH_TOKEN> (cron 定时不受此限)
+    const at = req.headers.get("Authorization") || ""
     if (at !== "Bearer " + (globalThis.AUTH_TOKEN || "")) return new Response("unauthorized", { status: 401 })
+    const u = new URL(req.url)
     if (u.pathname === "/") return new Response("sf-monitor alive (GET /run to check)")
     if (u.pathname === "/t2") {
       try {
