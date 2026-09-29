@@ -1,0 +1,30 @@
+name: deploy-worker
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: upload sf-monitor script to Cloudflare
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_DEPLOY_TOKEN }}
+          CF_ACCOUNT_ID: REDACTED_CF_ACCOUNT_ID
+        run: |
+          jq -n --rawfile s ops/sf-monitor.js '{script: $s}' > /tmp/body.json
+          code=$(curl -sS -o /tmp/resp.json -w "%{http_code}" -X PUT \
+            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/sf-monitor" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @/tmp/body.json)
+          echo "HTTP $code"
+          head -c 1500 /tmp/resp.json
+          echo ""
+          [ "$code" = "200" ] || exit 1
