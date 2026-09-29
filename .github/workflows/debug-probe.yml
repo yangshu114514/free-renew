@@ -11,28 +11,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: shuyang /v1 notify probe (which layer returns 403?)
-        env:
-          OC_USER: ${{ secrets.NOTIFY_OPENCLAW_USER }}
-          OC_PASS: ${{ secrets.NOTIFY_OPENCLAW_PASSWORD }}
-        run: |
-          echo "=== A. no auth POST /v1/chat/completions ==="
-          curl -s -D /tmp/h1.txt -o /tmp/b1.txt -m 20 -X POST https://REDACTED_GATEWAY_DOMAIN/v1/chat/completions \
-            -H "Content-Type: application/json" -d '{}' || echo "curl FAIL"
-          echo "--- headers ---"; cat /tmp/h1.txt | head -25
-          echo "--- body(600) ---"; head -c 600 /tmp/b1.txt; echo ""
-          echo "=== B. basic auth POST /v1/chat/completions ==="
-          curl -s -D /tmp/h2.txt -o /tmp/b2.txt -m 25 -X POST https://REDACTED_GATEWAY_DOMAIN/v1/chat/completions \
-            -u "$OC_USER:$OC_PASS" -H "Content-Type: application/json" \
-            -d '{"model":"openclaw","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' || echo "curl FAIL"
-          echo "--- headers ---"; cat /tmp/h2.txt | head -25
-          echo "--- body(600) ---"; head -c 600 /tmp/b2.txt; echo ""
-          echo "=== C. baseline GET /cdn-cgi/trace ==="
-          curl -s -m 15 https://REDACTED_GATEWAY_DOMAIN/cdn-cgi/trace | head -20
-          echo "=== D. git skip-rule path (control) ==="
-          curl -s -o /tmp/b4.txt -w "status:%{http_code}\n" -m 15 "https://git.REDACTED_GATEWAY_DOMAIN/kb.git/info/refs?service=git-upload-pack"
-          echo "--- body(300) ---"; head -c 300 /tmp/b4.txt; echo ""
-
       - name: vendor API reachability (sanfengyun IP-ban check)
         run: |
           echo "--- sanfengyun https ---"
