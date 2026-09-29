@@ -22,7 +22,7 @@ jobs:
           code=$(curl -sS -o /tmp/resp.json -w "%{http_code}" -X PUT \
             "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/sf-monitor" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
-            -H "Content-Type: application/json" \
+            -H "Content-Type: application/javascript" \
             --data-binary @/tmp/body.json)
           echo "HTTP $code"
           head -c 1500 /tmp/resp.json
