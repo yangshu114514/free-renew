@@ -149,12 +149,11 @@ jobs:
       SANFENGYUN_ENABLED_6: ${{ vars.SANFENGYUN_ENABLED_6 }}
       SANFENGYUN_LOGIN_URL_6: ${{ vars.SANFENGYUN_LOGIN_URL_6 }}
       SANFENGYUN_RENEW_URL_6: ${{ vars.SANFENGYUN_RENEW_URL_6 }}
-      # 阿贝云免费服务已终止（50685 未开通），默认禁用；启用需显式设 secret=true
-      ABEIYUN_ENABLED: ${{ secrets.ABEIYUN_ENABLED || 'false' }}
       ABEIYUN_USERNAME: ${{ secrets.ABEIYUN_USERNAME }}
       ABEIYUN_PASSWORD: ${{ secrets.ABEIYUN_PASSWORD }}
       ABEIYUN_LABEL: ${{ vars.ABEIYUN_LABEL }}
-      ABEIYUN_ENABLED: ${{ vars.ABEIYUN_ENABLED }}
+      # 免费服务已终止（50685 未开通）：vars 未设置时默认禁用，重新启用需显式 variable set true
+      ABEIYUN_ENABLED: ${{ vars.ABEIYUN_ENABLED || 'false' }}
       ABEIYUN_LOGIN_URL: ${{ vars.ABEIYUN_LOGIN_URL }}
       ABEIYUN_RENEW_URL: ${{ vars.ABEIYUN_RENEW_URL }}
       ABEIYUN_USERNAME_2: ${{ secrets.ABEIYUN_USERNAME_2 }}
