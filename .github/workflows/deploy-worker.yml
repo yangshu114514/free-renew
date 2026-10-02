@@ -16,24 +16,47 @@ jobs:
       # 账户 ID 从 Secret 读：公开仓库里写死一个真实 Cloudflare 账户 ID，
       # 等于给扫描器白送一个可枚举的定位锚点（配合泄露的 token 才有危害，但没理由送）。
       # 注意公开仓库的 **Variables 任何人可读**，只有 Secrets 才加密。
+      # ⚠️ 必须用 multipart/form-data 上传，不能用 legacy 裸体 PUT。
+      #
+      # 2026-10-03 实测：`PUT .../workers/scripts/sf-monitor` 配
+      # `Content-Type: application/javascript`（service-worker 裸体上传）会把 Worker 上的
+      # compatibility_date **静默清空**（2026-09-01 → ""），HTTP 照样 200、不报任何错。
+      # 兼容性日期决定 Worker 的运行时语义，被悄悄改掉属于最难查的那类故障。
+      # 查询参数 `?compatibility_date=...` 同样无效（实测也是 200 但没生效）。
+      # 只有 multipart 的 metadata 部件才认，故改为 -F 上传。
       - name: upload sf-monitor script to Cloudflare
         env:
           CF_API_TOKEN: ${{ secrets.CF_DEPLOY_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          # 改这个值前先想清楚对 Worker 运行时语义的影响（见上）
+          SF_COMPAT_DATE: "2026-09-01"
         run: |
           if [ -z "$CF_ACCOUNT_ID" ]; then
             echo "::error name=cf account missing::Secret CF_ACCOUNT_ID 未配置——无法上传 Worker"
             exit 1
           fi
+          META=$(printf '{"body_part":"script","compatibility_date":"%s"}' "$SF_COMPAT_DATE")
           code=$(curl -sS -o /tmp/resp.json -w "%{http_code}" -X PUT \
             "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/sf-monitor" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
-            -H "Content-Type: application/javascript" \
-            --data-binary @ops/sf-monitor.js)
+            -F "metadata=$META;type=application/json" \
+            -F "script=@ops/sf-monitor.js;type=application/javascript")
           echo "HTTP $code"
           head -c 1500 /tmp/resp.json
           echo ""
           [ "$code" = "200" ] || exit 1
+
+          # 上传后**回读 settings 自检**：HTTP 200 不等于设置生效——上面提到的查询参数
+          # 写法就是 200 但 compatibility_date 依然为空。这条回读是"静默清空"的机器保证。
+          got=$(curl -sS \
+            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/sf-monitor/settings" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["compatibility_date"])')
+          echo "回读 compatibility_date = '$got'（期望 '$SF_COMPAT_DATE'）"
+          [ "$got" = "$SF_COMPAT_DATE" ] || {
+            echo "::error::compatibility_date 未按预期生效（拿到 '$got'）——上传接口换了行为，需重新确认上传方式"
+            exit 1
+          }
 
       # 把敏感配置推成 Worker 的加密 secret（脚本源码里只剩 env.XXX 读取）。
       # 这样"监控目标域名 / 微信绑定 ID"这类个人资产标识符既不在公开源码里，
