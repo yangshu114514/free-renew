@@ -46,8 +46,9 @@ pub struct CloudProfile {
 impl CloudProfile {
     /// 官网域名（`sanfengyun.com`），从 API 端点派生。
     ///
-    /// 不另存一份字段：域名有两处定义就一定会漂移，而文章里的官网链接必须与
-    /// 本次续期的厂商严格一致（挂错域名 = 人工审核直接判"文章与申请不符"）。
+    /// 不另存一份字段：域名有两处定义就一定会漂移。如今它的用途是**反向的**——
+    /// 用来识别并拦掉正文里出现的本家官网链接（见 `writer::check_links`），
+    /// 而不再像早期那样往文章里塞这条链接。
     pub fn site_domain(&self) -> String {
         let host = self
             .login_url

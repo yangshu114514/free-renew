@@ -303,11 +303,6 @@ fn user_prompt(
     persona: (&str, &str),
 ) -> String {
     let vendor = profile.name;
-    // site_domain() 返回的是**完整域名**（`sanfengyun.com`），末尾不能再拼 `.com`。
-    // 9/18 重构（8d8afc8）把 domain 从裸名 `"sanfengyun"` 换成 site_domain() 时漏改了
-    // 下面模板里的 `{domain}.com`，于是每篇文章都挂上 `https://www.sanfengyun.com.com`
-    // 这条死链——而 check_links 的 contains("sanfengyun.com") 恰好命中，9 天无人察觉。
-    let domain = profile.site_domain();
     let (stack, numbers) = persona;
     // 关键词为空时整句跳过：原来的 join 会生成一对空引号 “” 塞进提示词
     let kw_clause = if required.is_empty() {
@@ -320,11 +315,18 @@ fn user_prompt(
     } else {
         format!("禁止出现这些词：{}。\n", forbidden.join("、"))
     };
+    // ⚠️ 这里**不再要求**文章带官网链接，且明确要求模型别自发补外链。
+    // 2026-10-03 决策（覆盖此前"必须含官网域名"的硬要求）：
+    //   · 人工审核并不要求文章出现官网链接，不带照样过；
+    //   · 正文里的外链会被平台判成推广/引流，**反而抬高封号风险**。
+    // 所以"要求加链接"与"校验必须含域名"两头都撤——继续要求加等于在赌一条
+    // 纯风险项，而它正是 2026-10-03 三轮生成全废的直接原因。
     format!(
         "以【{angle}】为由头，写一篇 {vendor} 免费云服务器长期使用实测，正文 {length} 字左右（不含标题）。\n\n\
          你在这台机器上实际跑着：{stack}。观测到的资源情况：{numbers}。\
          把这些事实自然织进文章（可改写措辞、可补同类细节，但数字必须与这些观测一致）。\n\
-         {kw_clause}官网 https://www.{domain}（融进句子，别单列一行）。\n\
+         {kw_clause}正文里不要放任何官网链接或推广性外链——需要引导读者就写“自己搜官网”，\
+         不要贴 URL（贴外链会被平台判为推广，有封号风险）。\n\
          {forbidden_clause}\
          涉及续期时，明确写清周期和操作方式；不得暗示它是生产级高可用方案，\
          必须强调轻量/实验/备用属性。\n\
@@ -398,32 +400,26 @@ fn check_vendor(text: &str, profile: &CloudProfile, lowered: &str) -> Vec<String
     problems
 }
 
-/// 官网链接必须与本次续期厂商一致：给阿贝云的文章带三丰云链接，厂商人工审核
-/// 会判"文章与申请不符"直接拒。
+/// 文章**不得**出现本家官网链接（2026-10-03 决策，与 prompt 中"不要贴 URL"配套）。
 ///
-/// 另：域名后**紧跟字母**说明后缀被拼了两遍（`www.sanfengyun.com.com`）——那是条
-/// 死链，而 `contains(want)` 恰好命中，历史上整整 9 天每篇都带着它发出去。
+/// 此前这里是**反过来的**：强制正文必须含本家域名，缺了直接判不合格——那正是
+/// 2026-10-03 连废三轮、整轮续期放弃的直接原因。而这条要求本身两头都不成立：
+/// · 人工审核并不要求文章带官网链接，不带照样过；
+/// · 正文里的外链会被平台判成推广/引流，**反而抬高封号风险**。
+/// 所以从"必须含"翻转成"出现即拦"：宁可少一个链接，也不要多一次风控。
+///
+/// 别家域名由 [`check_vendor`] 另行拦截（防串厂商），此处只管本家。
+/// 历史上的 `.com.com` 死链检测已随本条一并撤除——它含在本家域名里，现在会被
+/// 这一条直接拦下，无需再单独判重复后缀。
 fn check_links(lowered: &str, profile: &CloudProfile) -> Vec<String> {
-    let want = profile.site_domain();
-    if !lowered.contains(&want) {
-        return vec![format!("缺少/错挂官网链接（本次厂商要求含 {want}）")];
+    let own = profile.site_domain();
+    if lowered.contains(&own) {
+        return vec![format!(
+            "正文出现官网链接 {own}——已决定文章一律不带官网链接\
+             （人工审核不要求，而贴外链会被平台判为推广、抬高封号风险）"
+        )];
     }
-    let dup = format!("{want}.");
-    let mut problems = Vec::new();
-    if let Some(idx) = lowered.find(&dup) {
-        // 命中 `want.` 后看下一个字符：`/`、空白、中文标点都是正常 URL 结尾，
-        // 只有 ASCII 字母才意味着又接了一个 TLD（.com.com）
-        if lowered[idx + dup.len()..]
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic())
-        {
-            problems.push(format!(
-                "官网域名疑似重复后缀（{want}.…）——模板把已含后缀的域名又拼了一遍，实际是死链"
-            ));
-        }
-    }
-    problems
+    vec![]
 }
 
 fn check_keywords(text: &str, required: &[String]) -> Vec<String> {
@@ -699,7 +695,9 @@ mod tests {
     }
 
     fn ok_body() -> String {
-        let mut s = String::from("# 三丰云免费云服务器实测：每7天手动续期\n\n三丰云 免费云服务器 免费虚拟主机 https://www.sanfengyun.com 用着还行\n\n");
+        // 正文不带任何官网链接——2026-10-03 起"干净"的定义就是无链接
+        // （带外链会被平台判为推广、抬高封号风险，见 check_links）
+        let mut s = String::from("# 三丰云免费云服务器实测：每7天手动续期\n\n三丰云 免费云服务器 免费虚拟主机 用着还行，想试的自己搜官网\n\n");
         for i in 0..8 {
             s.push_str(&format!("- 优点{i}：稳定够用\n"));
         }
@@ -755,10 +753,12 @@ mod tests {
             problems.iter().any(|p| p.contains("官网链接")),
             "漏拦错误域名: {problems:?}"
         );
-        // 换成本家名字+本家域名后必须放行
+        // 换成本家名字后必须放行（域名也一并去掉：现在任何官网链接都不许出现，
+        // 否则这里会被 check_links 拦成"本家文章被误杀"的假失败）
         let fixed = s
             .replace("三丰云用户也说好", "半年观察")
-            .replace("sanfengyun", "abeiyun");
+            .replace("sanfengyun", "abeiyun")
+            .replace("https://www.abeiyun.com", "自己搜官网");
         assert!(
             validate(&fixed, p, &[], &[], DEFAULT_LENGTHS).is_empty(),
             "本家文章被误杀"
@@ -850,7 +850,7 @@ mod tests {
     #[test]
     fn sensitive_words_do_not_false_positive_on_legit_tech() {
         // "防火墙" 含 "火"，"官方文档""CDN节点""反向代理" 都是正当词，不得误杀
-        let mut s = String::from("# 三丰云免费云服务器实测\n\n三丰云 免费云服务器 免费虚拟主机 https://www.sanfengyun.com\n防火墙规则照抄官方文档，CDN 节点与反向代理都在跑，政策范围内自用\n\n");
+        let mut s = String::from("# 三丰云免费云服务器实测\n\n三丰云 免费云服务器 免费虚拟主机 自己搜官网\n防火墙规则照抄官方文档，CDN 节点与反向代理都在跑，政策范围内自用\n\n");
         for i in 0..8 {
             s.push_str(&format!("- 优点{i}\n"));
         }
@@ -893,48 +893,63 @@ mod tests {
         let prompt = user_prompt("角度", 1500, p, &[], &[], ("栈", "数字"));
         assert!(!prompt.contains("“”"), "空关键词不得生成空引号: {prompt}");
         assert!(!prompt.contains("禁止出现这些词"));
-        assert!(prompt.contains("https://www.sanfengyun.com"));
+        // 2026-10-03 起提示词**不再**要求带官网链接（贴外链会被判推广、抬高封号风险）
+        assert!(
+            !prompt.contains(&format!("https://www.{}", p.site_domain())),
+            "提示词不得要求模型贴官网链接: {prompt}"
+        );
+        assert!(
+            prompt.contains("不要放任何官网链接"),
+            "提示词应明确禁止外链: {prompt}"
+        );
         assert!(prompt.contains("三丰云"));
         assert!(!prompt.contains("阿贝云"), "提示词里不得出现别家厂商");
     }
 
     #[test]
-    fn prompt_link_is_not_double_suffixed() {
-        // 旧断言只查 contains("https://www.sanfengyun.com")，而
-        // "https://www.sanfengyun.com.com" 恰好以它开头——所以模板把后缀拼两遍时
-        // 测试照样全绿，死链就这么发了 9 天。这里改成"不得出现 {完整域名}.com"。
+    fn prompt_never_contains_any_official_link() {
+        // 覆盖所有云服务商：提示词一律不给、也不许模型自发补官网链接。
+        // 人工审核不要求链接，而外链会被平台判为推广、抬高封号风险。
         for key in ["sanfengyun", "abeiyun"] {
             let p = profile(key);
             let prompt = user_prompt("角度", 1500, p, &[], &[], ("栈", "数字"));
-            let bad = format!("https://www.{}.com", p.site_domain());
+            let domain = p.site_domain();
             assert!(
-                !prompt.contains(&bad),
-                "{key} 提示词里出现重复后缀死链 {bad}"
+                !prompt.contains(&domain),
+                "{key} 提示词里出现了官网域名 {domain}"
             );
             assert!(
-                prompt.contains(&format!("https://www.{}", p.site_domain())),
-                "{key} 提示词缺少正确官网链接"
+                !prompt.contains("https://www."),
+                "{key} 提示词里出现了 https://www. 开头的链接"
             );
         }
     }
 
     #[test]
-    fn double_suffixed_domain_is_rejected() {        // 死链必须被拦下：contains("sanfengyun.com") 对 sanfengyun.com.com 恒真
+    fn official_link_in_body_is_rejected() {
+        // 出现本家官网域名即拦——这是"文章不带链接"的机器保证
         let mut s = ok_body();
-        s.push_str("官网 https://www.sanfengyun.com.com 文档更新及时");
+        s.push_str("官网 https://www.sanfengyun.com 文档更新及时");
         let problems = validate(&s, profile("sanfengyun"), &[], &[], DEFAULT_LENGTHS);
         assert!(
-            problems.iter().any(|p| p.contains("重复后缀")),
+            problems.iter().any(|p| p.contains("官网链接")),
+            "漏拦本家官网链接: {problems:?}"
+        );
+
+        // .com.com 死链同样含本家域名，必须一并拦下（不再单列"重复后缀"分支）
+        let mut dup = ok_body();
+        dup.push_str("官网 https://www.sanfengyun.com.com 文档更新及时");
+        let problems = validate(&dup, profile("sanfengyun"), &[], &[], DEFAULT_LENGTHS);
+        assert!(
+            problems.iter().any(|p| p.contains("官网链接")),
             "漏拦 .com.com 死链: {problems:?}"
         );
 
-        // 正常 URL 结尾（斜杠、空白、中文标点）不得误杀
-        let mut ok = ok_body();
-        ok.push_str("官网 https://www.sanfengyun.com/ 和 https://www.sanfengyun.com（都在用）");
-        let problems = validate(&ok, profile("sanfengyun"), &[], &[], DEFAULT_LENGTHS);
+        // 不含任何官网链接的正文必须放行
+        let problems = validate(&ok_body(), profile("sanfengyun"), &[], &[], DEFAULT_LENGTHS);
         assert!(
-            !problems.iter().any(|p| p.contains("重复后缀")),
-            "误杀正常官网链接: {problems:?}"
+            !problems.iter().any(|p| p.contains("官网链接")),
+            "误杀无链接的正文: {problems:?}"
         );
     }
 }
