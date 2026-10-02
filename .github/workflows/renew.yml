@@ -255,8 +255,41 @@ jobs:
 
       # ubuntu runner 只有西文字体，不装 CJK 字体的话 headless Chrome
       # 会把中文全部渲染成豆腐块 □□□（2026-09-12 实测交出过一张全是方块的截图）
+      #
+      # 为什么不是一句 `apt-get update && apt-get install`：
+      # 2026-10-03 实测该写法在本 runner 上**静默挂死 26 分钟**（apt 默认不设连接
+      # 超时，镜像不可达就一直等），而本 job 的 timeout 是 180min——一个坏镜像就
+      # 能把当次续期拖到超时；更糟的是 concurrency 是 cancel-in-progress:false，
+      # 僵死的 run 会把后续整点调度一起堵住。所以这里显式设超时 + 3 轮重试 +
+      # 强制 IPv4（IPv6 黑洞是 apt 卡死的常见成因），把"挂死"变成"快速失败"。
+      # 已装中文字体则直接跳过，省掉整段网络往返（自建/缓存镜像上常见）。
+      #
+      # 失败即 exit 1 而不是 continue-on-error：字体缺失只会产出豆腐块截图，
+      # 而截图发生在**发文之后**——硬跑下去等于先烧掉一篇发文额度、再交一张
+      # 必被审核打回的证据。宁可在发文前就把这一轮判失败。
       - name: Install CJK fonts
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          if fc-list :lang=zh 2>/dev/null | grep -q .; then
+            echo "系统已有中文字体，跳过安装"
+            fc-list :lang=zh | head -5
+            exit 0
+          fi
+          APT_OPTS=(-o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20
+                    -o Acquire::Retries=3 -o Acquire::ForceIPv4=true)
+          for i in 1 2 3; do
+            echo "───── apt 第 $i 次尝试 ─────"
+            if sudo apt-get "${APT_OPTS[@]}" update -qq &&
+               sudo apt-get "${APT_OPTS[@]}" install -y -qq fonts-noto-cjk; then
+              echo "中文字体安装成功"
+              exit 0
+            fi
+            echo "::warning::第 $i 次 apt 失败，5s 后重试"
+            sleep 5
+          done
+          echo "::error::三次尝试后中文字体仍装不上——截图会渲染成豆腐块，本 run 判失败（不交一张全是方块的证据）"
+          exit 1
 
       - name: Build (release)
         run: cargo build --release --locked
