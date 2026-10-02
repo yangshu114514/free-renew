@@ -15,7 +15,7 @@ Requires [Git](https://git-scm.com/) + [GitHub CLI](https://cli.github.com/) (`g
 irm https://raw.githubusercontent.com/yangshu114514/free-renew/main/install.ps1 | iex
 ```
 
-The wizard runs 6 steps: repo → cloud account passwords (**any number of servers per vendor**) → LLM API (optional test) → **choose publish platform (CSDN/Zhihu) and capture its cookie** → notification method → check schedule (default: hourly, offset off the top of the hour) + confirm. About 5 minutes. Preview safely first with `.\install.ps1 -DryRun` (writes nothing).
+The wizard runs 6 steps: repo → cloud account passwords (**any number of servers per vendor**) → LLM API (optional test) → **choose publish platform (CSDN / Zhihu / dev.to — CSDN and Zhihu capture a cookie, dev.to only needs an API key)** → notification method → check schedule (default: hourly, offset off the top of the hour) + confirm. About 5 minutes. Preview safely first with `.\install.ps1 -DryRun` (writes nothing).
 
 Linux/macOS or manual route: clone the repo and follow [docs/SETUP.md](docs/SETUP.md).
 
@@ -33,15 +33,16 @@ Each vendor supports any number of accounts (e.g. **2 Sanfengyun + 3 Abeiyun**);
 - **Serial, never concurrent**: concurrent runs would log into the same vendor and post to the same content platform simultaneously, raising risk-control and rate-limit exposure. Worst case ≈25 min per server; the job timeout defaults to 180 min. For more servers, set Variable `RUN_TIMEOUT_MINUTES = servers × 25 + 30`.
 - **Scheduled runs queue instead of overlapping** (`concurrency`), so two runs never touch the same accounts at once.
 
-> ⚠️ **Publishing quota is a real constraint**: a new CSDN account allows about 2 posts/day. With 3+ servers due on the same day, CSDN may not be enough — `PLATFORM_FALLBACK` automatically switches to the other platform, or stagger the renewal windows.
+> ⚠️ **Publishing quota is a real constraint**: a new CSDN account allows about 2 posts/day. With 3+ servers due on the same day, CSDN may not be enough — switch the primary platform to dev.to (publishes through its official API, consuming no CSDN quota), or let `PLATFORM_FALLBACK` automatically switch to the other platform, or stagger the renewal windows.
 
-## Publish platform: CSDN / Zhihu (both supported, with automatic fallback)
+## Publish platform: CSDN / Zhihu / dev.to (primary + backup, automatic switch)
 
-Renewal articles must go to a third-party content platform for the vendor's human review. Pick one — or both — at install; switchable later:
+Renewal articles must go to a third-party content platform for the vendor's human review. Pick one platform — optionally plus a **backup** that takes over in the same run when the primary's pipeline breaks. Switchable later:
 
+- **dev.to** (recommended): uses the platform's **official REST API**; authentication is a single API key (generated at <https://dev.to/settings/extensions>) — no cookie, no signing, no browser, and no datacenter-IP risk-control exposure, making it the least fragile of the three paths. The key lives in repo **Secret `DEVTO_API_KEY`** (`gh secret set DEVTO_API_KEY --body "<key>"`; the repo is public, so the key **must never go into config.toml/code/scripts**), and optional Variable `DEVTO_TAGS` (space-separated, max 4, default `cloud devops vps servers`). ⚠️ Two limits: ① dev.to's public API has **no delete-article endpoint** (only publish/update/unpublish) — drafts are removed on the web UI, published articles only from dev.to's backend; ② dev.to's content policy states the platform is "not designed primarily for the purposes of promotion or creating backlinks", so keep articles as genuine experience writing.
 - **CSDN** (default): needs a CSDN account with blog enabled; cookie captured automatically by `scripts/refresh-csdn-cookie.ps1`. Simplest.
-- **Zhihu**: needs an account that can post normally; cookie captured via CDP by `scripts/refresh-zhihu-cookie.ps1` (the `z_c0` auth cookie is httpOnly). ⚠️ Auto-posting to Zhihu from a datacenter IP risks triggering their risk control; the code stops-and-does-not-retry on captcha/403, but the IP-profile risk can't be removed by code. If the account matters, use CSDN.
-- **Both connected (you pick primary/backup)**: whichever platform is primary, if its pipeline fails (expired cookie / captcha / risk-control reject) the article is **automatically published via the other platform** in the same run, plus a notification to fix the primary. With only one platform's cookie configured, the other is never attempted. After setup, the `test_platforms` dispatch input sends one *draft* on each platform (everything stops before going public; no quota used) as a health check.
+- **Zhihu**: needs an account that can post normally; cookie captured via CDP by `scripts/refresh-zhihu-cookie.ps1` (the `z_c0` auth cookie is httpOnly). ⚠️ Auto-posting to Zhihu from a datacenter IP risks triggering their risk control; the code stops-and-does-not-retry on captcha/403, but the IP-profile risk can't be removed by code. If the account matters, use dev.to or CSDN.
+- **Primary + backup (you pick the order)**: whichever platform is primary, if its pipeline fails (expired cookie / captcha / risk-control reject / invalid API key) the article is **automatically published via the backup** in the same run, plus a notification to fix the primary. With only one platform configured, the other is never attempted. After setup, the `test_platforms` dispatch input sends one *draft* per configured platform (everything stops before going public; no quota used) as a health check.
 
 ## Daily use: one command
 
@@ -54,12 +55,14 @@ When the publish cookie expires (weeks to months; you'll be notified if a notify
 
 The dedicated browser profile usually keeps you logged in — the script re-exports the cookie automatically and optionally pushes it to GitHub Secrets. 30 seconds.
 
+dev.to has no cookie, so no refresh script is ever needed there; only regenerate the Secret if the API key is revoked or rotated: `gh secret set DEVTO_API_KEY --body "<new key>"`.
+
 ## Content safety & recovery
 
 - **Content red-line**: the generator hard-rejects review landmine terms (VPN/circumvention, intranet tunneling, no-ICP-filing, gray-industry, politics, …). A hit triggers a rewrite; repeated hits **abort the run rather than publish** — better to skip a renewal than post borderline content that could strike your platform account.
 - **Publish → screenshot waits for the article to go public**: Zhihu/CSDN newly-published posts are briefly invisible; the screenshot step polls until it's live, so a login-wall page is never submitted as a "screenshot".
 - **`--submit-existing`**: if publishing succeeded but only the "upload screenshot to vendor" POST died on network flakiness, reuse the already-published article to retry screenshot+submit **without re-posting** — no extra articles spamming your account.
-- Diagnostic entry points (`--test-write` / `--test-zhihu` / `--test-platforms` two-platform draft health-check / screenshot test / the recovery above) are documented in [docs/SETUP.md](docs/SETUP.md). → "手动触发与故障恢复".
+- Diagnostic entry points (`--test-write` / `--test-zhihu` / `--test-platforms` multi-platform draft health-check / screenshot test / the recovery above) are documented in [docs/SETUP.md](docs/SETUP.md). → "手动触发与故障恢复".
 
 > The installer supports a `-DryRun` preview: `.\install.ps1 -DryRun` prints what it would do without forking, writing secrets, or triggering the workflow.
 
@@ -71,7 +74,7 @@ The dedicated browser profile usually keeps you logged in — the script re-expo
 | [docs/protocol/](docs/protocol/) | technical details: Sanfengyun/Abeiyun `cmd=` protocol, CSDN signing, Zhihu publish API (verified samples) |
 | [NOTICE](NOTICE) | third-party attribution |
 
-Architecture in one sentence: **GitHub Actions runs this repo's Rust binary on a schedule** — logs into each configured vendor account in turn, checks the renewal window (exits in seconds when nothing is due); when due, an LLM writes a unique-angle experience article (machine-validated against banned words / required keywords / AI-tone heuristics / content-safety red-lines), publishes it to the chosen content platform (CSDN or Zhihu), screenshots the page, and submits to the vendor's review queue. Scheduled workflows get disabled by GitHub after 60 days of repo inactivity — a self-contained keepalive job in `renew.yml` prevents that.
+Architecture in one sentence: **GitHub Actions runs this repo's Rust binary on a schedule** — logs into each configured vendor account in turn, checks the renewal window (exits in seconds when nothing is due); when due, an LLM writes a unique-angle experience article (machine-validated against banned words / required keywords / AI-tone heuristics / content-safety red-lines), publishes it to the chosen content platform (CSDN / Zhihu / dev.to), screenshots the page, and submits to the vendor's review queue. Scheduled workflows get disabled by GitHub after 60 days of repo inactivity — a self-contained keepalive job in `renew.yml` prevents that.
 
 ## Acknowledgments
 
@@ -81,6 +84,7 @@ The protocol layer stands on **[BookerLiu/FreeServer](https://github.com/BookerL
 Other direct credits (full list in NOTICE):
 
 - **[rust-headless-chrome](https://github.com/rust-headless-chrome/rust-headless-chrome)** (MIT) - CDP client; the screenshot anti-detection capability (webdriver/chrome/plugins/permissions/webgl bypass) comes from its built-in enable_stealth_mode().
+- **[socialsbase/devto-api](https://github.com/socialsbase/devto-api)** (MIT, `Copyright (c) 2025 socialsbase`) - `src/devto.rs`, the dev.to publishing channel, is a **condensed inline derivation** of this SDK: it keeps the base URL constant, the `api-key` auth header, the shape of `POST /api/articles` (operationId `createArticle`) and its 201/401/422 handling, and drops the Progenitor code-generation layer, the async runtime and 60+ unused endpoints in favor of this project's existing blocking reqwest stack (full MIT license text and compatibility notes in [NOTICE](NOTICE), item 6).
 - ~~[gautamkrishnar/keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow)~~ (MIT) - formerly used to prevent GitHub's 60-day auto-disable of scheduled workflows; the action was blocked by GitHub for ToS reasons in 2025-04, so this project now ships a self-contained keepalive job in `renew.yml`. Kept here as a historical note.
 - CSDN x-ca signing constants: public constants embedded in CSDN's own frontend JS, as documented in community articles.
 - Zhihu publish flow: modeled on community HTTP implementations such as [zimya/zhihu_obsidian](https://github.com/zimya/zhihu_obsidian) (0BSD) — the create-draft → PATCH-content → attach-topic → publish endpoints, which need no x-zse-96 signing. Independent Rust implementation, no code copied (see NOTICE).
@@ -93,7 +97,7 @@ Other direct credits (full list in NOTICE):
 
 **Disclaimer (full text)**:
 
-1. This project is for learning and personal technical research only. Users are responsible for complying with the Terms of Service of Abeiyun, Sanfengyun, CSDN, Zhihu, and all third-party platforms involved.
+1. This project is for learning and personal technical research only. Users are responsible for complying with the Terms of Service of Abeiyun, Sanfengyun, CSDN, Zhihu, dev.to, and all third-party platforms involved.
 2. Automating the vendors' promotion-style renewal terms may not be endorsed by them. **Any consequence of using this project (account suspension, server reclamation, data loss) is borne by the user.**
 3. Article content is LLM-generated. Ensure compliance with platform content policies and truthfully declare AI-assisted generation (enabled by default). Do not mass-produce spam or abuse.
 4. No user credentials are stored, uploaded, or collected by this project; all configuration lives in your local files or private repo Secrets.

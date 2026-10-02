@@ -10,6 +10,12 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # 被探测的真实文章 URL 从 Secret 读：这是公开仓库，写死
+      # blog.csdn.net/<账号>/... 等于把你的 CSDN 账号 ID 白送给扫描器。
+      # fork 出去的副本没有这两个 Secret，对应探针会自己跳过（而不是失败）。
+      CSDN_ARTICLE: ${{ secrets.CSDN_PROBE_ARTICLE }}
+      CSDN_ARTICLE_2: ${{ secrets.CSDN_PROBE_ARTICLE_2 }}
     steps:
       - name: vendor API reachability (sanfengyun IP-ban check)
         run: |
@@ -25,15 +31,17 @@ jobs:
 
       - name: csdn plain-HTTP probe (today's live article)
         run: |
+          if [ -z "$CSDN_ARTICLE" ]; then echo "跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
           curl -s -o /tmp/a.html -w "HTTP:%{http_code} size:%{size_download}" -m 20 \
             -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-            https://blog.csdn.net/REDACTED_CSDN_USER/article/details/165004650
+            "$CSDN_ARTICLE"
           echo ""
           head -c 200 /tmp/a.html
 
       - name: csdn WAP-share URL probe (curl + chrome)
         run: |
-          WAP="https://blog.csdn.net/REDACTED_CSDN_USER/article/details/165004650?utm_source=blog_wap_share"
+          if [ -z "$CSDN_ARTICLE" ]; then echo "跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
+          WAP="${CSDN_ARTICLE}?utm_source=blog_wap_share"
           MOBILE_UA="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
           echo "--- curl desktop UA ---"
           curl -s -o /tmp/w1.html -w "HTTP:%{http_code} size:%{size_download}" -m 20 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "$WAP"
@@ -49,15 +57,17 @@ jobs:
 
       - name: headless chrome probe — default headless
         run: |
+          if [ -z "$CSDN_ARTICLE" ]; then echo "跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
           google-chrome --headless --no-sandbox --disable-gpu --dump-dom --virtual-time-budget=10000 \
-            "https://blog.csdn.net/REDACTED_CSDN_USER/article/details/165004650" > /tmp/dom1.html 2>/tmp/e1.log || true
+            "$CSDN_ARTICLE" > /tmp/dom1.html 2>/tmp/e1.log || true
           echo "DOM size: $(wc -c < /tmp/dom1.html)"
           grep -o "iw(\|403 Forbidden\|article_title\|WAF" /tmp/dom1.html | sort | uniq -c || echo "(no signature)"
 
       - name: headless chrome probe — new headless mode
         run: |
+          if [ -z "$CSDN_ARTICLE" ]; then echo "跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
           google-chrome --headless=new --no-sandbox --disable-gpu --dump-dom --virtual-time-budget=10000 \
-            "https://blog.csdn.net/REDACTED_CSDN_USER/article/details/165004650" > /tmp/dom2.html 2>/tmp/e2.log || true
+            "$CSDN_ARTICLE" > /tmp/dom2.html 2>/tmp/e2.log || true
           echo "DOM size: $(wc -c < /tmp/dom2.html)"
           grep -o "iw(\|403 Forbidden\|article_title\|WAF" /tmp/dom2.html | sort | uniq -c || echo "(no signature)"
 
@@ -93,9 +103,15 @@ jobs:
       - name: Run --test-screenshot (cookie-injected, live article)
         env:
           CSDN_COOKIES: ${{ secrets.CSDN_COOKIES }}
+          CSDN_ARTICLE_2: ${{ secrets.CSDN_PROBE_ARTICLE_2 }}
           CHROME_PATH: /usr/bin/google-chrome
           FREE_RENEW_DEBUG_DIR: /tmp/sshot-debug
-        run: ./target/release/free-renew --test-screenshot "https://blog.csdn.net/REDACTED_CSDN_USER/article/details/165005042"
+        run: |
+          if [ -z "$CSDN_ARTICLE_2" ]; then
+            echo "::notice name=sshot skipped::Secret CSDN_PROBE_ARTICLE_2 未配置——跳过截图探针"
+            exit 0
+          fi
+          ./target/release/free-renew --test-screenshot "$CSDN_ARTICLE_2"
       - name: upload screenshot
         if: always()
         uses: actions/upload-artifact@v4

@@ -5,7 +5,7 @@
 //!
 //! 流程（每天被 Actions cron 拉起，幂等）：
 //! 逐账号 login API → check_free_delay → [未到期/审核中] 下一个 / [到期]
-//! → LLM 写文章 → 发布到内容平台(CSDN/知乎) → 截图 → multipart 提交续期 → 失败通知
+//! → LLM 写文章 → 发布到内容平台(CSDN/知乎/dev.to) → 截图 → multipart 提交续期 → 失败通知
 //!
 //! 多账号：`cfg.accounts` 里有多少个账号就跑多少轮，账号之间**串行**执行
 //! （并发会同时向同一内容平台发文、同时登录同一厂商，风控与限流风险明显上升，
@@ -20,6 +20,8 @@
 mod cloud;
 mod config;
 mod csdn;
+mod cnblogs;
+mod devto;
 mod file_config;
 mod http;
 mod logging;
@@ -590,7 +592,50 @@ fn dispatch_publish(
                 final_publish,
             )
         }
-        other => anyhow::bail!("未知发文平台: {other}（当前支持: csdn, zhihu）"),
+        "devto" => {
+            let dt = require_configured(
+                cfg.devto.as_ref(),
+                "devto",
+                "API key",
+                "DEVTO_API_KEY 环境变量（GitHub Actions 用 Secret；不要写进 config.toml）",
+            )?;
+            if !dt.ready() {
+                anyhow::bail!(
+                    "发文平台为 devto 但 API key 为空——设 DEVTO_API_KEY（Actions Secret）后重试"
+                );
+            }
+            let client = devto::DevtoClient::new(&dt.api_key)?;
+            client.publish(
+                &article.title,
+                &article.body_markdown,
+                &dt.tags,
+                final_publish,
+            )
+        }
+        "cnblogs" => {
+            let cb = require_configured(
+                cfg.cnblogs.as_ref(),
+                "cnblogs",
+                "用户名/令牌",
+                "config.toml [platform.cnblogs] 或 CNBLOGS_USERNAME + CNBLOGS_TOKEN 环境变量",
+            )?;
+            if !cb.ready() {
+                anyhow::bail!(
+                    "发文平台为 cnblogs 但用户名或令牌为空——设 CNBLOGS_USERNAME / \
+                     CNBLOGS_TOKEN（令牌在 账户中心→博客设置→其他设置 打开\
+                     「允许 MetaWeblog 博客客户端访问」后获取，**不是登录密码**）"
+                );
+            }
+            let client = cnblogs::CnblogsClient::new(cb)?;
+            // 博客园是独立博客：H1 是标题的正常组成部分，保留（与 CSDN 同口径；
+            // 只有知乎才要丢 H1，因为它的标题由专栏另设）
+            client.publish(
+                &article.title,
+                &crate::markdown::to_html(&article.body_markdown, true),
+                final_publish,
+            )
+        }
+        other => anyhow::bail!("未知发文平台: {other}（当前支持: csdn, zhihu, devto, cnblogs）"),
     }
 }
 
@@ -797,6 +842,7 @@ fn main() -> Result<()> {
             "provider": cfg.platform_provider.clone(),
             "csdn_ready": cfg.csdn.as_ref().map(|c| c.ready()).unwrap_or(false),
             "zhihu_ready": cfg.zhihu.as_ref().map(|z| z.ready()).unwrap_or(false),
+            "devto_ready": cfg.devto.as_ref().map(|d| d.ready()).unwrap_or(false),
             "notify_backend": notify_backend_label(&cfg.notify),
             // 本次真正传进来的可选项环境变量名（只有名字，没有值）。
             // 排障"我明明配了 X 却没生效"最快的一眼：变量没出现在这里，
@@ -878,6 +924,8 @@ mod tests {
                 topics: vec![],
                 toc: false,
             }),
+            cnblogs: None,
+            devto: None,
             notify: NotifyConfig {
                 webhook_url: String::new(),
                 tag: String::new(),

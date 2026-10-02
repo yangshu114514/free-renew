@@ -105,6 +105,8 @@ pub struct PlatformSection {
     pub fallback: Option<String>,
     pub csdn: Option<CsdnPlatformConfig>,
     pub zhihu: Option<ZhihuPlatformConfig>,
+    pub cnblogs: Option<CnblogsPlatformConfig>,
+    pub devto: Option<DevtoPlatformConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -131,6 +133,59 @@ impl Default for ZhihuPlatformConfig {
             cookie: String::new(),
             topics: default_zhihu_topics(),
             toc: false,
+        }
+    }
+}
+
+/// 博客园：走平台官方的 MetaWeblog API（XML-RPC），认证只要用户名 + 访问令牌。
+/// 没有 Cookie、没有签名、不需要浏览器——这是它比"模拟浏览器"类平台稳的根本原因。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CnblogsPlatformConfig {
+    /// 登录用户名（XML-RPC 的 username 参数）
+    pub username: String,
+    /// MetaWeblog 访问令牌（在 账户中心→博客设置→其他设置 里获取，**不是**登录密码）
+    pub token: String,
+    /// 博客子域名，用于拼公开 URL；留空 = 与用户名相同
+    #[serde(default)]
+    pub blog_user: String,
+    /// 文章标签（MetaWeblog 的 mt_keywords，逗号连接后提交）
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// 文章分类（须是博客园里已存在的分类名，不存在会被平台忽略）
+    #[serde(default)]
+    pub categories: Vec<String>,
+}
+
+/// dev.to（Forem）：平台官方 REST API，认证只要一个 API key
+/// （在 dev.to/settings/extensions 生成）。没有 Cookie、没有签名、不需要浏览器——
+/// 和博客园一样走"官方接口"路线，也是它比模拟浏览器类平台稳的根本原因。
+#[derive(Debug, Clone, Deserialize)]
+pub struct DevtoPlatformConfig {
+    /// 发文 API key。
+    ///
+    /// **建议留空**，改从环境变量 `DEVTO_API_KEY` 注入（GitHub Actions 用 Secret）：
+    /// config.toml 经常被一并提交进仓库，而这个仓库是公开的。
+    #[serde(default)]
+    pub api_key: String,
+    /// 文章标签（dev.to 最多认 4 个，多出的会被平台忽略）
+    #[serde(default = "default_devto_tags")]
+    pub tags: Vec<String>,
+}
+
+pub fn default_devto_tags() -> Vec<String> {
+    vec![
+        "cloud".into(),
+        "devops".into(),
+        "vps".into(),
+        "servers".into(),
+    ]
+}
+
+impl Default for DevtoPlatformConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            tags: default_devto_tags(),
         }
     }
 }

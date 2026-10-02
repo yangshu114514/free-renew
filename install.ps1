@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  free-renew 交互式安装向导：仓库 → 云账号 → LLM → 发文平台(CSDN/知乎)Cookie → 通知 → 定时与首跑。
+  free-renew 交互式安装向导：仓库 → 云账号 → LLM → 发文平台(CSDN/知乎/dev.to) → 通知 → 定时与首跑。
 
 .DESCRIPTION
   全程问答式，本地登录 Git + GitHub CLI 即可完成。所有配置以加密 Secrets / 仓库 Variables
@@ -31,6 +31,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# **关键**：向 native 命令（gh）的 stdin 写值时，必须用**不带 BOM** 的 UTF8。
+# .NET 的 [Text.Encoding]::UTF8 是带 BOM 的实例，走管道（本脚本的 Set-GhSecret /
+# Set-GhVar 全靠 stdin 传值）会把 EF BB BF 写到值的最前面——GitHub 侧存下来的就是
+# "\u{FEFF}devto" 这种带不可见前缀的值。后果是程序端 match 不上平台名、
+# Secret 比对失败，而且日志里只显示一个看似正常的字符串，极难定位。
+# 这里显式用无 BOM 构造函数；WinPS 5.1 与 pwsh 7 都支持 ::new()。
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 $UPSTREAM = "yangshu114514/free-renew"
 $script:AnsIdx = 0
@@ -240,16 +248,19 @@ Set-GhSecret "LLM_MODEL"     $llmModel
 Ok "LLM 配置完成"
 
 # ── [4/6] 发文平台 ───────────────────────────────────────────
-Step 4 "选择发文平台并采集其登录 Cookie"
+Step 4 "选择发文平台（CSDN / 知乎 / dev.to）并配置其凭据"
 Write-Host @"
 续期需把体验文章发布到一个第三方内容平台，厂商人工审核该文章 URL。支持：
   1 = CSDN   （需已开通博客的 CSDN 号；Cookie 寿命数月，较省心）
   2 = 知乎   （需发帖正常、有重量的知乎号）
         提醒：知乎在 GitHub Actions 机房 IP 上自动发帖有触发风控/影响账号的实质风险，
         代码已加内容安全红线并'弹验证码即停不重试'，但机房 IP 的画像风险无法消除。
-  3 = 两家都连（主/备自选：CSDN 主或知乎主，主平台链路出问题当轮自动切另一家并发通知）
+  3 = CSDN + 知乎 双平台（主/备自选：CSDN 主或知乎主，主平台链路出问题当轮自动切另一家并发通知）
+  4 = dev.to  （★推荐：平台官方 REST API，只要一个 API key——没有 Cookie、没有签名、
+        不用浏览器，也不存在机房 IP 风控问题。三条链路里最不容易挂的一条）
+  5 = dev.to 主 + CSDN/知乎 兜底（最稳：dev.to 挂了当轮自动切备用平台并发通知）
 "@ -ForegroundColor Gray
-$platform = Ask "选择发文平台 (1/2/3，默认 1)" "1"
+$platform = Ask "选择发文平台 (1/2/3/4/5，默认 1)" "1"
 if ($platform -eq "") { $platform = "1" }
 
 # 采集 Cookie：真机弹浏览器 + 校验新鲜度；DRY-RUN 返回占位、不弹窗。
@@ -266,13 +277,78 @@ function Get-PlatformCookie($label, $refreshRel, $cookieFile) {
     (Get-Content $cookieFile -Raw).Trim()
 }
 
+# dev.to 与另外两家不同：不弹浏览器、不采 Cookie，只要一个 API key。
+# key 在 https://dev.to/settings/extensions 生成（**只显示一次**，丢了只能重新生成）。
+function Get-DevtoApiKey {
+    if ($DryRun) { Warn "DRY-RUN：不验证 key，用占位值"; return "dryrun-devto-key" }
+    $k = "$(Ask "dev.to API Key（在 https://dev.to/settings/extensions 生成，只显示一次）")".Trim()
+    if ($k -eq "") { Die "dev.to API key 为空。先去 https://dev.to/settings/extensions 生成，再重跑本向导" }
+    # 就地验证：key 写错/已吊销立刻就知道，不用等到跑续期才在通知里发现
+    Write-Host "  正在验证 key ..." -ForegroundColor DarkGray
+    try {
+        $me = Invoke-RestMethod -Uri "https://dev.to/api/users/me" `
+            -Headers @{ "api-key" = $k; "accept" = "application/json" } -TimeoutSec 30
+        Ok "dev.to 认证通过：账号 $($me.username)"
+    } catch {
+        Warn "dev.to 验证失败：$($_.Exception.Message)"
+        $go = Ask "仍要继续保存此 key? (y/N)" "N"
+        if ($go -notmatch "^[yY]") { Die "请修正 key 后重跑本向导" }
+    }
+    return $k
+}
+
+# dev.to 文章标签（平台最多认 4 个，多出的会被忽略）
+function Set-DevtoTags {
+    $t = "$(Ask "dev.to 文章标签（空格分隔，最多 4 个；回车用默认 'cloud devops vps servers'）")".Trim()
+    if ($t -ne "") { Set-GhVar "DEVTO_TAGS" $t }
+}
+
 if ($platform -eq "2" -or $platform -eq "3") {
     $ack = Ask "确认已了解知乎机房 IP 风控风险并继续? (y/N)" "N"
     if ($DryRun) { $ack = "y" }   # 演练不因此中断，只为走通分支
-    if ($ack -notmatch "^[yY]") { Die "已取消。如改用 CSDN，请重跑本向导并选 1" }
+    if ($ack -notmatch "^[yY]") { Die "已取消。如改用 CSDN 或 dev.to，请重跑本向导并选 1/4/5" }
 }
 
-if ($platform -eq "2") {
+if ($platform -eq "4") {
+    # dev.to 单平台：官方 API，只要一个 API key。显式关兜底（与知乎/CSDN 单平台一致）
+    Set-GhVar "PLATFORM_PROVIDER" "devto"
+    Set-GhVar "PLATFORM_FALLBACK" "none"
+    $dk = Get-DevtoApiKey
+    Set-GhSecret "DEVTO_API_KEY" $dk
+    Set-DevtoTags
+    $chosenPlatform = "dev.to"
+    $chosenRefresh  = "https://dev.to/settings/extensions（重新生成 API key 后改 Secret DEVTO_API_KEY）"
+    Ok "发文平台 = dev.to（API key 已入 Secret DEVTO_API_KEY；官方接口，无 Cookie/无风控）"
+} elseif ($platform -eq "5") {
+    # dev.to 主 + 备用平台兜底：dev.to 是官方 API 最稳，但账号侧仍可能出问题
+    #（被封/被撤 key/限流），兜底保证这一轮照样发得出去并发通知提醒你修。
+    $fb = Ask "兜底平台选哪家? (1=CSDN / 2=知乎，默认 1)" "1"
+    if ($fb -eq "") { $fb = "1" }
+    Set-GhVar "PLATFORM_PROVIDER" "devto"
+    $dk = Get-DevtoApiKey
+    Set-GhSecret "DEVTO_API_KEY" $dk
+    Set-DevtoTags
+    if ($fb -eq "2") {
+        Set-GhVar "PLATFORM_FALLBACK" "zhihu"
+        $ack = Ask "确认已了解知乎机房 IP 风控风险并继续? (y/N)" "N"
+        if ($DryRun) { $ack = "y" }
+        if ($ack -notmatch "^[yY]") { Die "已取消" }
+        $ck = Get-PlatformCookie "知乎" "scripts\refresh-zhihu-cookie.ps1" (Join-Path $env:TEMP "zhihu_cookies_oneline.txt")
+        Set-GhSecret "ZHIHU_COOKIES" $ck
+        $topics = Ask "知乎发文话题（空格分隔，回车用默认 '免费云服务器 虚拟主机'）"
+        if ("$topics".Trim() -ne "") { Set-GhVar "ZHIHU_TOPICS" "$topics".Trim() }
+        $chosenPlatform = "dev.to 为主 + 知乎兜底"
+        $chosenRefresh  = "dev.to: https://dev.to/settings/extensions  知乎: scripts/refresh-zhihu-cookie.ps1"
+        Ok "发文平台 = dev.to 优先，链路故障自动切知乎并发通知（key+Cookie 均已入 Secrets）"
+    } else {
+        Set-GhVar "PLATFORM_FALLBACK" "csdn"
+        $ckc = Get-PlatformCookie "CSDN" "scripts\refresh-csdn-cookie.ps1" (Join-Path $env:TEMP "csdn_cookies_oneline.txt")
+        Set-GhSecret "CSDN_COOKIES" $ckc
+        $chosenPlatform = "dev.to 为主 + CSDN 兜底"
+        $chosenRefresh  = "dev.to: https://dev.to/settings/extensions  CSDN: scripts/refresh-csdn-cookie.ps1"
+        Ok "发文平台 = dev.to 优先，链路故障自动切 CSDN 并发通知（key+Cookie 均已入 Secrets）"
+    }
+} elseif ($platform -eq "2") {
     # 单平台：显式关兜底——仓库里可能残留另一家的旧 Cookie Secret，
     # "自动互备"会让重装/换选的用户被陈Cookie拖累出诡异行为
     Set-GhVar "PLATFORM_PROVIDER" "zhihu"
@@ -462,7 +538,7 @@ Write-Host "三丰云:   $(MaskAccounts $sfAccounts)   共 $($sfAccounts.Count) 
 Write-Host "阿贝云:   $(MaskAccounts $abAccounts)   共 $($abAccounts.Count) 台"
 Write-Host "合计:     $($sfAccounts.Count + $abAccounts.Count) 台服务器将逐台检查续期"
 Write-Host "LLM:      $llmModel @ $llmBase"
-Write-Host "发文平台: $chosenPlatform（Cookie 已入 Secrets）"
+Write-Host "发文平台: $chosenPlatform（凭据已入 Secrets：Cookie 或 API key）"
 Write-Host "通知:     $notifyStatus"
 Write-Host "定时:     $scheduleNote"
 Write-Host ""
@@ -540,7 +616,8 @@ if ($DryRun) {
 }
 Write-Host @"
 后续你唯一可能要做的事:
-  - 发文平台 Cookie 过期($chosenPlatform；数月一次) → 收到通知(需已配通知) → 重跑 $chosenRefresh
+  - 发文平台凭据过期($chosenPlatform) → 收到通知(需已配通知) → 按下面方式刷新：
+      CSDN/知乎：重跑对应 refresh 脚本；dev.to：到 settings/extensions 重新生成 key 并更新 Secret
   - 增删服务器 → 重跑本向导（多配几台就继续加，少配几台会自动清理残留的编号 Secrets）
   - 临时停用某一台 → 仓库 Settings→Variables 里给对应编号加 XXX_ENABLED_N=false（如 ABEIYUN_ENABLED_2）
   - 密码轮换 → 仓库 Settings→Secrets 直接改对应编号的项

@@ -107,11 +107,20 @@ pub const ENV_KEYS: &[&str] = &[
     "CSDN_COOKIES",
     "ZHIHU_COOKIES",
     "ZHIHU_TOPICS",
+    "CNBLOGS_USERNAME",
+    "CNBLOGS_TOKEN",
+    "CNBLOGS_BLOG_USER",
+    "CNBLOGS_TAGS",
+    "CNBLOGS_CATEGORIES",
+    "DEVTO_API_KEY",
+    "DEVTO_TAGS",
     // 通知
     "NOTIFY_OPENCLAW_URL",
     "NOTIFY_OPENCLAW_USER",
     "NOTIFY_OPENCLAW_PASSWORD",
     "NOTIFY_OPENCLAW_MODEL",
+    // 微信绑定目标（openclaw message 工具的 target）。值不进源码，只进加密 Secret
+    "NOTIFY_WECHAT_TARGET",
     "NOTIFY_PUSHPLUS_TOKEN",
     "NOTIFY_WEBHOOK_URL",
     "NOTIFY_TAG",
@@ -265,6 +274,62 @@ impl std::fmt::Debug for ZhihuConfig {
 }
 
 #[derive(Clone)]
+pub struct CnblogsConfig {
+    /// 登录用户名（XML-RPC 的 username 参数）
+    pub username: String,
+    /// MetaWeblog 访问令牌（**不是**登录密码）
+    pub token: String,
+    /// 博客子域名（拼公开 URL 用）；空 = 与 username 相同
+    pub blog_user: String,
+    pub tags: Vec<String>,
+    pub categories: Vec<String>,
+}
+
+impl CnblogsConfig {
+    /// 平台是否可用：与 `CsdnConfig::ready` 同一口径——但博客园要**两个**字段，
+    /// 少了任何一个都发不出去，所以两个都得有值才算就绪。
+    pub fn ready(&self) -> bool {
+        !self.username.trim().is_empty() && !self.token.trim().is_empty()
+    }
+}
+
+impl std::fmt::Debug for CnblogsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CnblogsConfig")
+            .field("username", &self.username)
+            .field("token", &redact(&self.token))
+            .field("blog_user", &self.blog_user)
+            .field("tags", &self.tags)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct DevtoConfig {
+    /// dev.to 发文 API key（dev.to/settings/extensions 生成）
+    pub api_key: String,
+    /// 文章标签（dev.to 最多认 4 个）
+    pub tags: Vec<String>,
+}
+
+impl DevtoConfig {
+    /// 平台是否可用：与 `CsdnConfig::ready` 同一口径——key 有值才算就绪。
+    pub fn ready(&self) -> bool {
+        !self.api_key.trim().is_empty()
+    }
+}
+
+/// 手写 Debug：key 会随 `{cfg:?}` 进 JSONL 日志工件（与 Cookie 同一个坑），必须遮掉。
+impl std::fmt::Debug for DevtoConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DevtoConfig")
+            .field("api_key", &redact(&self.api_key))
+            .field("tags", &self.tags)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct NotifyConfig {
     pub webhook_url: String,
     pub tag: String,
@@ -314,6 +379,8 @@ pub struct AppConfig {
     pub platform_fallback: Option<String>,
     pub csdn: Option<CsdnConfig>,
     pub zhihu: Option<ZhihuConfig>,
+    pub cnblogs: Option<CnblogsConfig>,
+    pub devto: Option<DevtoConfig>,
     pub notify: NotifyConfig,
     pub article_ready_timeout: u64,
     pub http_timeout: u64,
@@ -349,13 +416,53 @@ fn resolve_fallback(
 /// 可单测，二是键统一大写后，Windows 上写小写变量名不会莫名失效。
 type EnvMap = BTreeMap<String, String>;
 
+/// 环境变量**值**的统一清洗：把 BOM（U+FEFF）与首尾空白交替剥干净。
+///
+/// 抽成纯函数是为了能在不碰真实进程环境的前提下锁定行为——环境变量是进程级的，
+/// 测试里直接 set_var 会与并行跑的其它测试互相污染。
+///
+/// **为什么是交替迭代，而不是"先 A 再 B"**：BOM 不是 Unicode White_Space，
+/// `trim()` 认不出它；但两者可以互相"掩护"——
+/// - 输入 `"  \u{feff}devto \n"`：若先 `trim_matches(BOM)`，两端是**空白**
+///   不是 BOM，一个都剥不掉，随后 trim 只清掉空白，BOM 滞留成 `"\u{feff}devto"`；
+///   （这正是第一版实现踩的坑，被 `bom_and_whitespace_are_stripped_from_env_values` 抓住）
+/// - 输入 `"\u{feff} \u{feff}"`：BOM 之间夹着空白，单趟也清不完。
+///
+/// 交替跑到不动点即可两种形态全覆盖。长度单调不增，必然终止。
+fn clean_env_value(raw: &str) -> String {
+    let mut cur = raw;
+    loop {
+        let next = cur.trim().trim_matches('\u{feff}');
+        if next == cur {
+            return next.to_string();
+        }
+        cur = next;
+    }
+}
+
+/// 环境变量**键**的统一清洗：只剥 BOM、统一大写（键上不该有空白，不参与 trim，
+/// 以免把 `" PLATFORM"` 这种带脏空白的键静默"修好"从而掩盖上游写入问题）。
+fn clean_env_key(raw: &str) -> String {
+    raw.trim_matches('\u{feff}').to_ascii_uppercase()
+}
+
 fn env_snapshot() -> EnvMap {
     // 所有凭据/URL 一律 trim：Secret 注入渠道（管道/网页粘贴）常混入尾部换行或
     // 空白，LLM 供应商实测会对带 \n 的 Bearer 报"未提供令牌"
+    //
+    // **额外剥掉 U+FEFF（BOM）**：Windows 上用 PowerShell 管道把值喂给 gh
+    // （`"devto" | gh variable set ...`）时，若 $OutputEncoding 是 .NET 的
+    // `Encoding::UTF8`（**默认带 BOM**），写出去的字节流就以 EF BB BF 开头，
+    // GitHub 侧存下来的值便是 "\u{FEFF}devto"。
+    // 关键陷阱：`str::trim()` 只移除 Unicode White_Space，而 U+FEFF **不是**
+    // White_Space（它是 format 字符），所以 trim 根本去不掉——不显式剥的话，
+    // PLATFORM_PROVIDER 会变成 "\u{feff}devto"，`match platform` 落到
+    // `other => 未知发文平台` 分支，整轮续期在发文这步必挂，且日志里只看到
+    // 一个带不可见字符的平台名，极难排查。2026-10-02 实际踩到过。
     std::env::vars_os()
         .filter_map(|(k, v)| {
-            let k = k.to_str()?.to_ascii_uppercase();
-            let v = v.to_str()?.trim().to_string();
+            let k = clean_env_key(k.to_str()?);
+            let v = clean_env_value(v.to_str()?);
             (!v.is_empty()).then_some((k, v))
         })
         .collect()
@@ -636,13 +743,65 @@ fn load_zhihu(file: Option<&FileConfig>, env: &EnvMap) -> Option<ZhihuConfig> {
     })
 }
 
-/// 发文平台整段（主平台、兜底、两家 Cookie 配置）——它们互相依赖，
+/// 从环境变量读一个列表，空格与逗号都当分隔符（仓库 Variables 是网页手填的，
+/// 两种写法都有人用；只认一种会让"标签配了但没生效"变成静默故障）。
+fn env_list(env: &EnvMap, key: &str) -> Option<Vec<String>> {
+    env.get(key)
+        .map(|s| {
+            s.split(|c: char| c.is_whitespace() || c == ',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect::<Vec<String>>()
+        })
+        .filter(|v| !v.is_empty())
+}
+
+fn load_cnblogs(file: Option<&FileConfig>, env: &EnvMap) -> Option<CnblogsConfig> {
+    let section = file.and_then(|f| f.platform.cnblogs.clone());
+    let username_env = env.get("CNBLOGS_USERNAME").cloned();
+    let token_env = env.get("CNBLOGS_TOKEN").cloned();
+    // 用户名和令牌都没有 = 用户没打算用博客园
+    if section.is_none() && username_env.is_none() && token_env.is_none() {
+        return None;
+    }
+    let section = section.unwrap_or_default();
+    Some(CnblogsConfig {
+        username: username_env.unwrap_or(section.username),
+        token: token_env.unwrap_or(section.token),
+        blog_user: env
+            .get("CNBLOGS_BLOG_USER")
+            .cloned()
+            .unwrap_or(section.blog_user),
+        tags: env_list(env, "CNBLOGS_TAGS").unwrap_or(section.tags),
+        categories: env_list(env, "CNBLOGS_CATEGORIES").unwrap_or(section.categories),
+    })
+}
+
+fn load_devto(file: Option<&FileConfig>, env: &EnvMap) -> Option<DevtoConfig> {
+    let section = file.and_then(|f| f.platform.devto.clone());
+    let key_env = env.get("DEVTO_API_KEY").cloned();
+    // 文件段和 key 环境变量都没有 = 用户没打算用 dev.to
+    if section.is_none() && key_env.is_none() {
+        return None;
+    }
+    let section = section.unwrap_or_default();
+    Some(DevtoConfig {
+        // 环境变量优先：仓库里那份 config.toml 是公开的，key 不进文件
+        api_key: key_env.unwrap_or(section.api_key),
+        tags: env_list(env, "DEVTO_TAGS").unwrap_or(section.tags),
+    })
+}
+
+/// 发文平台整段（主平台、兜底、各平台凭据配置）——它们互相依赖，
 /// 拆开加载会让"兜底要不要开"的判定散到别处。
 struct PlatformBundle {
     provider: String,
     fallback: Option<String>,
     csdn: Option<CsdnConfig>,
     zhihu: Option<ZhihuConfig>,
+    cnblogs: Option<CnblogsConfig>,
+    devto: Option<DevtoConfig>,
 }
 
 fn load_platform(file: Option<&FileConfig>, env: &EnvMap) -> PlatformBundle {
@@ -656,7 +815,12 @@ fn load_platform(file: Option<&FileConfig>, env: &EnvMap) -> PlatformBundle {
         .to_ascii_lowercase();
     let csdn = load_csdn(file, env);
     let zhihu = load_zhihu(file, env);
-    // 兜底：显式 PLATFORM_FALLBACK / 文件段优先，未设则"两家都连即自动互备"
+    let cnblogs = load_cnblogs(file, env);
+    let devto = load_devto(file, env);
+    // 兜底：显式 PLATFORM_FALLBACK / 文件段优先，未设则"两家都连即自动互备"。
+    // 博客园不参与自动互备：它要用户名+令牌两个字段，而"自动"的语义是"另一家
+    // 只要 Cookie 在就顶上"——把三家的就绪条件混进一个自动判定里，出错时没人
+    // 说得清到底挑了谁。要拿它当兜底就显式写 PLATFORM_FALLBACK=cnblogs。
     let fallback = resolve_fallback(
         &provider,
         env.get("PLATFORM_FALLBACK")
@@ -670,6 +834,8 @@ fn load_platform(file: Option<&FileConfig>, env: &EnvMap) -> PlatformBundle {
         fallback,
         csdn,
         zhihu,
+        cnblogs,
+        devto,
     }
 }
 
@@ -752,6 +918,8 @@ impl AppConfig {
             platform_fallback: platform.fallback,
             csdn: platform.csdn,
             zhihu: platform.zhihu,
+            cnblogs: platform.cnblogs,
+            devto: platform.devto,
             notify: load_notify(file.as_ref(), &env),
             article_ready_timeout: env_u64(
                 &env,
@@ -820,6 +988,51 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 锁定 BOM 剥离行为。这条测试有真实事故背书：2026-10-02 用
+    /// `"devto" | gh variable set PLATFORM_PROVIDER`（PowerShell 管道 +
+    /// .NET `Encoding::UTF8` 默认带 BOM）写出了 `"\u{feff}devto"`，
+    /// GitHub 侧存的值就带着不可见前缀。
+    #[test]
+    fn bom_and_whitespace_are_stripped_from_env_values() {
+        // 纯 BOM 前缀（PowerShell 管道 + Encoding::UTF8 的典型产物）
+        assert_eq!(clean_env_value("\u{feff}devto"), "devto");
+        // BOM 夹在空白之间：单趟"先剥 BOM 再 trim"会失败（两端是空白不是 BOM）
+        assert_eq!(clean_env_value("  \u{feff}devto \n"), "devto");
+        // 尾部 BOM
+        assert_eq!(clean_env_value("devto\u{feff}"), "devto");
+        // BOM 之间夹空白——只有交替迭代才能收敛
+        assert_eq!(clean_env_value("\u{feff} \u{feff}"), "");
+        // 首尾空白夹 BOM、BOM 又夹空白的多重组合
+        assert_eq!(clean_env_value(" \u{feff}\n\u{feff} "), "");
+        // 普通空白照旧由 trim 处理
+        assert_eq!(clean_env_value("  csdn\n"), "csdn");
+        // 中文凭据不受剥 BOM 影响（防止清洗误伤正文）
+        assert_eq!(clean_env_value("\u{feff}三丰云 免费虚拟主机"), "三丰云 免费虚拟主机");
+        // 全是 BOM → 空串（随后被 env_snapshot 丢弃，不产生"空值占位"）
+        assert_eq!(clean_env_value("\u{feff}\u{feff}"), "");
+        // 中间内容里的 BOM 不能被误删（只清边界）
+        assert_eq!(clean_env_value("ab\u{feff}cd"), "ab\u{feff}cd");
+    }
+
+    /// 键侧同样要剥 BOM：gh/git 在 Windows 上写环境变量也可能带前缀，
+    /// 键带 BOM 会让 `env.get("PLATFORM_PROVIDER")` 直接查不到（静默走默认值）。
+    #[test]
+    fn bom_is_stripped_from_env_keys_and_case_is_normalized() {
+        assert_eq!(clean_env_key("\u{feff}devto_tags"), "DEVTO_TAGS");
+        assert_eq!(clean_env_key("devto_tags"), "DEVTO_TAGS");
+        assert_eq!(clean_env_key("platform_provider"), "PLATFORM_PROVIDER");
+    }
+
+    /// 回归锁：若有人把 clean_env_value 改回 `raw.trim().to_string()`，
+    /// 第一条断言就会挂——那正是这次事故的形态。
+    #[test]
+    fn trim_alone_cannot_remove_bom() {
+        // 证明 U+FEFF 不是 Unicode White_Space（所以 str::trim 去不掉它）。
+        // 这条是上面那组测试的"为什么"，改 impl 的人会先看到它。
+        assert_eq!("\u{feff}devto".trim(), "\u{feff}devto", "trim 确实去不掉 BOM");
+        assert_ne!(clean_env_value("\u{feff}devto"), "\u{feff}devto");
+    }
 
     #[test]
     fn fallback_resolution_matrix() {
@@ -1165,6 +1378,8 @@ password = "p5"
             platform_fallback: None,
             csdn: None,
             zhihu: None,
+            cnblogs: None,
+            devto: None,
             notify: NotifyConfig {
                 webhook_url: String::new(),
                 tag: "renewal".into(),
