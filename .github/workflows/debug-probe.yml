@@ -17,6 +17,36 @@ jobs:
       CSDN_ARTICLE: ${{ secrets.CSDN_PROBE_ARTICLE }}
       CSDN_ARTICLE_2: ${{ secrets.CSDN_PROBE_ARTICLE_2 }}
     steps:
+      # 放在第一位：前面的 CSDN/厂商探针都可能失败（curl SSL、WAF、网络抖动），
+      # 而 GitHub Actions 默认在某步骤失败后**跳过后续步骤**——上一版就因此让
+      # 这个 dev.to 检查显示 "-" 被跳过、完全没跑到。放最前面才保证它一定执行。
+      - name: dev.to API key check (READ-ONLY, creates no draft)
+        env:
+          DEVTO_API_KEY: ${{ secrets.DEVTO_API_KEY }}
+        run: |
+          # 只读 GET /api/users/me：验证 key 是否有效、是否被正确注入。
+          # **刻意不用 test_platforms**——那会为每个平台建一篇草稿，而 dev.to 的
+          # 公开 API 没有删除文章的端点（只有 publish/update/unpublish），
+          # 草稿只能去网页端手删。这里零副作用地把链路验完。
+          if [ -z "$DEVTO_API_KEY" ]; then
+            echo "::notice name=devto skipped::Secret DEVTO_API_KEY 未配置"
+            exit 0
+          fi
+          code=$(curl -sS -o /tmp/devto-me.json -w "%{http_code}" -m 30 \
+            -H "api-key: $DEVTO_API_KEY" -H "accept: application/json" \
+            https://dev.to/api/users/me || echo "000")
+          echo "GET /api/users/me -> HTTP $code"
+          # 只回显 username 与 key 长度；**绝不回显 key 本身**
+          echo "key length = ${#DEVTO_API_KEY}"
+          if [ "$code" = "200" ]; then
+            echo "authenticated as: $(python3 -c 'import json,sys;print(json.load(open("/tmp/devto-me.json")).get("username"))' 2>/dev/null || echo '?')"
+            echo "✅ dev.to 发文链路的认证侧可用"
+          else
+            echo "❌ HTTP $code"
+            head -c 300 /tmp/devto-me.json; echo ""
+            exit 1
+          fi
+
       - name: vendor API reachability (sanfengyun IP-ban check)
         run: |
           echo "--- sanfengyun https ---"
@@ -70,33 +100,6 @@ jobs:
             "$CSDN_ARTICLE" > /tmp/dom2.html 2>/tmp/e2.log || true
           echo "DOM size: $(wc -c < /tmp/dom2.html)"
           grep -o "iw(\|403 Forbidden\|article_title\|WAF" /tmp/dom2.html | sort | uniq -c || echo "(no signature)"
-
-      - name: dev.to API key check (READ-ONLY, creates no draft)
-        env:
-          DEVTO_API_KEY: ${{ secrets.DEVTO_API_KEY }}
-        run: |
-          # 只读 GET /api/users/me：验证 key 是否有效、是否被正确注入。
-          # **刻意不用 test_platforms**——那会为每个平台建一篇草稿，而 dev.to 的
-          # 公开 API 没有删除文章的端点（只有 publish/update/unpublish），
-          # 草稿只能去网页端手删。这里零副作用地把链路验完。
-          if [ -z "$DEVTO_API_KEY" ]; then
-            echo "::notice name=devto skipped::Secret DEVTO_API_KEY 未配置"
-            exit 0
-          fi
-          code=$(curl -sS -o /tmp/devto-me.json -w "%{http_code}" -m 30 \
-            -H "api-key: $DEVTO_API_KEY" -H "accept: application/json" \
-            https://dev.to/api/users/me || echo "000")
-          echo "GET /api/users/me -> HTTP $code"
-          # 只回显 username 与 key 长度；**绝不回显 key 本身**
-          echo "key length = ${#DEVTO_API_KEY}"
-          if [ "$code" = "200" ]; then
-            echo "authenticated as: $(python3 -c 'import json,sys;print(json.load(open("/tmp/devto-me.json")).get("username"))' 2>/dev/null || echo '?')"
-            echo "✅ dev.to 发文链路的认证侧可用"
-          else
-            echo "❌ HTTP $code"
-            head -c 300 /tmp/devto-me.json; echo ""
-            exit 1
-          fi
 
       - name: candidate platforms reachability from Azure runner
         run: |
