@@ -304,11 +304,24 @@ fn user_prompt(
 ) -> String {
     let vendor = profile.name;
     let (stack, numbers) = persona;
-    // 关键词为空时整句跳过：原来的 join 会生成一对空引号 “” 塞进提示词
+    // 关键词为空时整句跳过：原来的 join 会生成一对空引号 “” 塞进提示词。
+    //
+    // 收尾必须是句号换行——此前这里以「，以及」结尾，是为了接后面那句
+    // 「以及官网链接 <域名>」。2026-10-03 撤掉链接要求后连接词就悬空了，
+    // 提示词变成「必须自然包含关键词：“免费虚拟主机”，以及正文里不要放任何官网链接…」，
+    // 两件事被粘成一句，模型的注意力被后半句带走，连挂三轮漏词。
+    // 现在把关键词单独成句并写明"硬性要求"，与 validate 的判罚口径对齐。
     let kw_clause = if required.is_empty() {
         String::new()
     } else {
-        format!("必须自然包含关键词：“{}”，以及", required.join("”、“"))
+        format!(
+            "正文必须原样出现这些词（硬性要求，少一个整篇作废）：{}。\n",
+            required
+                .iter()
+                .map(|k| format!("“{k}”"))
+                .collect::<Vec<_>>()
+                .join("、")
+        )
     };
     let forbidden_clause = if forbidden.is_empty() {
         String::new()
@@ -553,6 +566,77 @@ fn split_title_body(text: &str) -> Option<(String, String)> {
     Some((title.to_string(), rest.trim().to_string()))
 }
 
+/// 把上一轮的具体问题翻译成"这次到底该怎么改"。
+///
+/// 此前这里是一句写死的写作风格建议——不管实际问题是什么都原样附上
+/// （"结构更松散、详略不均、至少一个真实缺点，不要套话"）。可校验清单里
+/// **大多数条目跟写作风格无关**：缺关键词、串厂商、正文带链接、标题不合法……
+/// 这些拿到的处方完全不对症，模型既不知道要补哪个词、也不知道要删哪个链接，
+/// 只能原样再赌一轮，而重试次数只有 3。
+///
+/// 2026-10-03 实测就是这么废掉整轮续期的：三轮全挂在"缺少关键词 免费虚拟主机"，
+/// 每轮收到的却都是"结构更松散、不要套话"。问题清单一直是对的，错的是这句处方。
+///
+/// 返回去重后的处方列表；识别不了的残余问题给一条兜底，绝不返回空。
+fn retry_guidance(problems: &[String]) -> Vec<String> {
+    fn add(tips: &mut Vec<String>, tip: &str) {
+        if !tips.iter().any(|t| t == tip) {
+            tips.push(tip.to_string());
+        }
+    }
+    let mut tips: Vec<String> = Vec::new();
+    for p in problems {
+        if p.contains("缺少关键词") {
+            add(
+                &mut tips,
+                "上一版漏了必须出现的词，这次务必把这些词**原样**写进正文\
+                 （不要换近义词、不要只写一半、不要只在标题里带）",
+            );
+        } else if p.contains("官网链接") {
+            add(
+                &mut tips,
+                "正文里**一个网址都不要有**：不写 http/https、不写任何域名，\
+                 厂商只用中文名提到",
+            );
+        } else if p.contains("缺少厂商名") {
+            add(&mut tips, "正文必须至少一次出现本厂商的中文全名");
+        } else if p.contains("禁止词") || p.contains("敏感词") {
+            add(
+                &mut tips,
+                "逐字避开上面列出的禁止词/敏感词，换一个不触线的说法",
+            );
+        } else if p.contains("（红线）") {
+            add(
+                &mut tips,
+                "不要用绝对化表述（最/第一/永久/无限…），也不要提任何竞品或暗示代称",
+            );
+        } else if p.contains("正文太短") {
+            add(
+                &mut tips,
+                "把正文写到规定字数下限以上，靠具体细节和过程扩写，不要复读灌水",
+            );
+        } else if p.contains("清单式总结") {
+            add(&mut tips, "补足 8-12 条 `- ` 开头的清单项");
+        } else if p.contains("小标题过多") {
+            add(&mut tips, "减少 `## ` 小标题，最多 4 个，其余用自然段承接");
+        } else if p.contains("AI 模板腔") || p.contains("抱怨词") {
+            add(
+                &mut tips,
+                "结构更松散、详略不均、至少一个真实缺点，不要套话",
+            );
+        } else if p.contains("第一行不是合法") {
+            add(
+                &mut tips,
+                "正文第一行必须是 `# 标题` 形式的 markdown 一级标题",
+            );
+        }
+    }
+    if tips.is_empty() {
+        add(&mut tips, "逐条规避上面列出的问题");
+    }
+    tips
+}
+
 pub fn generate_article(llm: &LlmConfig, profile: &CloudProfile) -> Result<Article> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(llm.timeout_secs))
@@ -570,6 +654,10 @@ pub fn generate_article(llm: &LlmConfig, profile: &CloudProfile) -> Result<Artic
     personas.shuffle(&mut rng);
 
     let mut last_problems: Vec<String> = vec![];
+    // 最后一轮被判废的原文。放弃时连它一起打进日志——此前失败只留一句问题清单，
+    // "缺少关键词 X"到底长什么样、是漏写还是换了近义词，事后完全无从判断
+    // （2026-10-03 为此又白烧了一次 runner）。
+    let mut last_text = String::new();
     for attempt in 0..llm.max_retries as usize {
         let angle = llm
             .angles
@@ -597,10 +685,19 @@ pub fn generate_article(llm: &LlmConfig, profile: &CloudProfile) -> Result<Artic
             json!({"role": "system", "content": system_prompt()}),
             json!({"role": "user", "content": user}),
         ];
-        // 上一版被判为 AI 腔/不合规——只追加"写作约束"，不塞旧正文（旧人设会串味）
+        // 上一版被判不合格——只追加"本轮要改什么"，不塞旧正文（旧人设会串味）。
+        // 处方由 retry_guidance 按实际问题逐条生成，不再是一句写死的文风建议：
+        // 缺关键词/串厂商/带链接这些非风格问题，收到"不要套话"是纯噪音。
         if !retry_feedback.is_empty() {
             let all = retry_feedback.join("；");
-            messages.push(json!({"role": "user", "content": format!("上一版被判定不合格，问题：{all}。这次务必规避：结构更松散、详略不均、至少一个真实缺点，不要套话，重写一篇。")}));
+            let tips = retry_guidance(&retry_feedback);
+            messages.push(json!({
+                "role": "user",
+                "content": format!(
+                    "上一版被判定不合格，问题：{all}。重写一篇，这次务必逐条做到：{}。",
+                    tips.join("；")
+                )
+            }));
         }
 
         let mut payload = json!({
@@ -662,6 +759,7 @@ pub fn generate_article(llm: &LlmConfig, profile: &CloudProfile) -> Result<Artic
         // 去重必须用 contains：dedup() 只合并**相邻**重复，而新问题恒追加在末尾，
         // 原写法实际是恒不生效的空操作。
         last_problems = problems.clone();
+        last_text = text.clone();
         let feedback = problems.join("；");
         if !retry_feedback.contains(&feedback) {
             retry_feedback.push(feedback);
@@ -678,6 +776,10 @@ pub fn generate_article(llm: &LlmConfig, profile: &CloudProfile) -> Result<Artic
             "文章生成放弃时最后一轮校验问题: {}",
             last_problems.join("；")
         );
+    }
+    if !last_text.is_empty() {
+        // 原文照打：排障时要看的是"模型到底写了什么"，不是我们以为它写了什么
+        tracing::warn!("文章生成放弃时最后一轮原文如下（供排障）:\n{last_text}");
     }
     bail!(
         "生成文章 {} 次仍不合规，放弃本次（宁缺毋滥，不做垃圾提交）",
@@ -923,6 +1025,67 @@ mod tests {
                 "{key} 提示词里出现了 https://www. 开头的链接"
             );
         }
+    }
+
+    #[test]
+    fn keyword_clause_is_a_standalone_sentence() {
+        // 2026-10-03 事故：撤掉链接要求时把连接词「，以及」留在了关键词句尾，
+        // 提示词变成"必须原样出现这些词：…，以及正文里不要放任何官网链接…"，
+        // 两件事被粘成一句，模型的注意力被后半句带走，连挂三轮漏词、整轮续期放弃。
+        // 这里钉住"关键词句自己收尾，且与下一条要求之间没有悬空连接词"。
+        let p = profile("sanfengyun");
+        let required = vec!["免费云服务器".to_string(), "免费虚拟主机".to_string()];
+        let prompt = user_prompt("角度", 1500, p, &required, &[], ("栈", "数字"));
+        assert!(
+            prompt.contains("“免费云服务器”、“免费虚拟主机”。"),
+            "关键词必须逐字列出并以句号收尾: {prompt}"
+        );
+        assert!(
+            !prompt.contains("，以及正文"),
+            "关键词句与链接句之间不得残留悬空连接词: {prompt}"
+        );
+        assert!(
+            prompt.contains("”。\n正文里不要放任何官网链接"),
+            "关键词句未独立成句、直接粘上了下一条要求: {prompt}"
+        );
+    }
+
+    #[test]
+    fn retry_guidance_targets_the_actual_problem() {
+        // 这是 2026-10-03 整轮续期报废的直接病灶：三轮问题都是
+        // "缺少关键词 免费虚拟主机"，而每轮喂回去的却都是写死的文风建议
+        // （"结构更松散、不要套话"）。处方不对症，模型自然一轮都改不对。
+        let g = retry_guidance(&["缺少关键词 免费虚拟主机".to_string()]);
+        assert!(
+            g.iter().any(|t| t.contains("原样")),
+            "缺关键词必须给出「把词写进去」的处方，实际: {g:?}"
+        );
+        assert!(
+            !g.iter().any(|t| t.contains("结构更松散")),
+            "缺关键词不该收到文风处方，实际: {g:?}"
+        );
+
+        // 带链接 → 处方必须是"删链接"，不是谈文风
+        let g = retry_guidance(&[
+            "正文出现官网链接 sanfengyun.com——已决定文章一律不带官网链接".to_string(),
+        ]);
+        assert!(g.iter().any(|t| t.contains("网址")), "实际: {g:?}");
+        assert!(!g.iter().any(|t| t.contains("结构更松散")), "实际: {g:?}");
+
+        // 文风类问题仍要拿到文风处方（不能为了修上面那条把原来的能力砍掉）
+        let g = retry_guidance(&["AI 模板腔过重（命中 4 处套话）".to_string()]);
+        assert!(g.iter().any(|t| t.contains("结构更松散")), "实际: {g:?}");
+
+        // 同类问题只出一条处方，避免 3 条重试清单里塞满重复指令
+        let g = retry_guidance(&[
+            "缺少关键词 免费虚拟主机".to_string(),
+            "缺少关键词 免费云服务器".to_string(),
+        ]);
+        assert_eq!(g.len(), 1, "同类问题只该出一条处方，实际: {g:?}");
+
+        // 将来新增的、识别不了的校验项必须有兜底，绝不返回空处方
+        let g = retry_guidance(&["某种将来才会新增的问题".to_string()]);
+        assert!(!g.is_empty(), "残余问题必须有兜底处方");
     }
 
     #[test]
