@@ -15,9 +15,9 @@
 irm https://raw.githubusercontent.com/yangshu114514/free-renew/main/install.ps1 | iex
 ```
 
-向导分 6 步问答：仓库 → 云账号密码（**同一家可逐台录入多台**）→ LLM API（可选测试）→ **选发文平台（CSDN/知乎）并采集其 Cookie** → 通知方式 → 每天几点跑 + 确认。全程约 5 分钟。想先安全预览可跑 `.\install.ps1 -DryRun`（不写任何东西）。
+向导分 6 步问答：仓库 → 云账号密码（**同一家可逐台录入多台**）→ LLM API（可选测试）→ **选发文平台（CSDN / 知乎 / dev.to；CSDN 与知乎采 Cookie，dev.to 只填 API key）** → 通知方式 → 每天几点跑 + 确认。全程约 5 分钟。想先安全预览可跑 `.\install.ps1 -DryRun`（不写任何东西）。
 
-Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.md) 手动走一遍（内容相同，含两个发文平台的采集方式、可选的 OpenClaw 微信通知接线、故障速查表）。
+Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.md) 手动走一遍（内容相同，含三个发文平台的接入方式、可选的 OpenClaw 微信通知接线、故障速查表）。
 
 ## 多台服务器：想配几台配几台
 
@@ -33,15 +33,16 @@ Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.m
 - **串行执行、不并发**：账号一个接一个跑（并发会同时登录同一厂商、同时向同一内容平台发文，风控与限流风险明显上升）。单台最坏 ≈25 分钟，job 超时默认 180 分钟；更多台就加 Variable `RUN_TIMEOUT_MINUTES = 账号数 × 25 + 30`。
 - **定时任务自动排队**（`concurrency`），绝不会两轮重叠同时操作同一批账号。
 
-> ⚠️ **发文额度是真实的硬约束**：CSDN 新号约 2 篇/天。同一天有 3 台以上到期时 CSDN 可能不够用——靠 `PLATFORM_FALLBACK` 自动切另一家平台兜底，或让各台的到期日错开。
+> ⚠️ **发文额度是真实的硬约束**：CSDN 新号约 2 篇/天。同一天有 3 台以上到期时 CSDN 可能不够用——把主平台换成 dev.to（走官方 API 发文，不占 CSDN 额度），或靠 `PLATFORM_FALLBACK` 自动切另一家平台兜底，或让各台的到期日错开。
 
-## 发文平台：CSDN / 知乎（可两家都连，自动兜底）
+## 发文平台：CSDN / 知乎 / dev.to（主 + 备胎，自动切换）
 
-续期文章要发到第三方内容平台供厂商审核，二选一或两家都连，装时选、日后可换：
+续期文章要发到第三方内容平台供厂商审核。可选一家，也可再配一个**备胎平台**（主平台链路挂了当轮自动切换），装时选、日后可换：
 
+- **dev.to**（推荐）：走平台**官方 REST API**，认证只要一个 API key（在 <https://dev.to/settings/extensions> 生成）——没有 Cookie、没有签名、不用浏览器，也不存在机房 IP 风控问题，三条链路里最不容易挂的一条。key 存仓库 **Secret `DEVTO_API_KEY`**（`gh secret set DEVTO_API_KEY --body "<key>"`；仓库是公开的，**绝不写进 config.toml/代码/脚本**），标签可选 Variable `DEVTO_TAGS`（空格分隔，最多 4 个，默认 `cloud devops vps servers`）。⚠️ 两条限制：① dev.to 公开 API **没有删除文章接口**（只有发布/更新/取消发布）——草稿在网页端删，已发布文章只能去 dev.to 后台手动删；② dev.to 内容政策写明"不以推广/外链为主要目的"，文章请保持真实使用体验的写法。
 - **CSDN**（默认）：需已开通博客的 CSDN 号，Cookie 用 `scripts/refresh-csdn-cookie.ps1` 自动采集，最省心。
-- **知乎**：需发帖正常的号；Cookie 用 `scripts/refresh-zhihu-cookie.ps1` 走 CDP 抓 httpOnly 的 `z_c0`。⚠️ 知乎在 Actions 机房 IP 上自动发帖有触发风控的实质风险，代码做到"弹验证码即停不重试"，但画像风险无法消除——号很重要请选 CSDN。
-- **两家都连（主/备方向自选）**：任选一家优先发文，主平台链路故障（Cookie 过期/验证码/风控拒发）时**当轮自动改由另一家发出**并通知你排查主平台；只配了一家时绝不会去试另一家。装好后 `test_platforms` 输入可让两家各发一篇草稿做链路体检（停在公开发布前，不占发文额度）。
+- **知乎**：需发帖正常的号；Cookie 用 `scripts/refresh-zhihu-cookie.ps1` 走 CDP 抓 httpOnly 的 `z_c0`。⚠️ 知乎在 Actions 机房 IP 上自动发帖有触发风控的实质风险，代码做到"弹验证码即停不重试"，但画像风险无法消除——号很重要请选 dev.to 或 CSDN。
+- **主 + 备胎（方向自选）**：任选一家优先发文，主平台链路故障（Cookie 过期/验证码/风控拒发/API key 失效）时**当轮自动改由备胎发出**并通知你排查主平台；只配了一家时绝不会去试其他家。装好后 `test_platforms` 输入可让已配置的平台各发一篇草稿做链路体检（停在公开发布前，不占发文额度）。
 
 ## 日常使用：只有一个命令
 
@@ -54,6 +55,8 @@ Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.m
 
 专用浏览器 profile 通常还保持登录态，脚本自动重新导出 Cookie 并可选直传 GitHub Secret，30 秒完事。
 
+dev.to 没有 Cookie，永远不需要刷新脚本；只有 API key 被吊销或重新生成时重设一次 Secret 即可：`gh secret set DEVTO_API_KEY --body "<新key>"`。
+
 其他一切（每日检查、续期提交、失败告警、运行日志）全自动，无需关心。
 
 要清理：`.\uninstall.ps1`（默认演练只列出、`-Execute` 才真删 GitHub Secrets/Variables 与本地 cookie profile）。采集脚本也支持 `.\scripts\refresh-*.ps1 -SelfTest` 只体检依赖与 C# 编译、不弹浏览器。
@@ -63,7 +66,7 @@ Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.m
 - **内容安全红线**：生成端内置审核雷区一票否决（翻墙/内网穿透/免备案/灰产/政治等），命中就重写、连续命中则放弃本轮**绝不发**——宁可不续，也不发一篇可能连累你内容平台账号的擦边文（被真实删稿后加的护栏）。
 - **发文→截图会等文章真正公开**：知乎/CSDN 刚发的文常短时不可见，截图步骤轮询等放行再截，不提交"登录墙"垃圾图。
 - **`--submit-existing`**：发文成功却卡在"上传截图到厂商"的网络抖动时，用已发布文章**只重试截图+提交、不重发**，避免反复灌新文。
-- 诊断入口（`--test-write` / `--test-zhihu` / `--test-platforms` 双平台草稿体检 / 截图测试 / 上述恢复）见 [docs/SETUP.md](docs/SETUP.md)「手动触发与故障恢复」。
+- 诊断入口（`--test-write` / `--test-zhihu` / `--test-platforms` 多平台草稿体检 / 截图测试 / 上述恢复）见 [docs/SETUP.md](docs/SETUP.md)「手动触发与故障恢复」。
 
 > 安装脚本支持 `-DryRun` 演练：`.\install.ps1 -DryRun` 只打印将执行的动作，不 fork、不写 Secret、不触发 workflow，可安全预览。
 
@@ -71,12 +74,12 @@ Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.m
 
 | 文档 | 内容 |
 |---|---|
-| [docs/SETUP.md](docs/SETUP.md) | 完整安装指南、双发文平台、Secrets 明细、通知接线、日常运维速查表 |
+| [docs/SETUP.md](docs/SETUP.md) | 完整安装指南、三发文平台（CSDN/知乎/dev.to）、Secrets 明细、通知接线、日常运维速查表 |
 | [docs/protocol/](docs/protocol/) | 技术细节：三丰云/阿贝云 `cmd=` 协议、CSDN 签名算法、知乎发文接口（实测样本） |
 | [config.example.toml](config.example.toml) | 全部配置项及注释（LLM 词表/角度池/禁词均可自定义） |
 | [NOTICE](NOTICE) | 第三方归属声明 |
 
-架构一句话：**GitHub Actions 按定时计划跑一次本仓库的 Rust 二进制**——逐台登录云厂商查状态，没到期几秒退出；到期则 LLM 生成一篇随机角度、经禁词/必含词/AI 腔/**内容审核红线**机器校验的体验文章，发布到所选内容平台（CSDN 或知乎），截图后提交给厂商审核，成功或失败都会通过已配置的通知渠道告警（OpenClaw→微信 / PushPlus / 通用 Webhook，可选，首个送达即停）。60 天仓库无提交会导致定时任务被 GitHub 停用，已内置自建 keepalive job 自动保活。
+架构一句话：**GitHub Actions 按定时计划跑一次本仓库的 Rust 二进制**——逐台登录云厂商查状态，没到期几秒退出；到期则 LLM 生成一篇随机角度、经禁词/必含词/AI 腔/**内容审核红线**机器校验的体验文章，发布到所选内容平台（CSDN / 知乎 / dev.to），截图后提交给厂商审核，成功或失败都会通过已配置的通知渠道告警（OpenClaw→微信 / PushPlus / 通用 Webhook，可选，首个送达即停）。60 天仓库无提交会导致定时任务被 GitHub 停用，已内置自建 keepalive job 自动保活。
 
 ## 致谢
 
@@ -85,6 +88,7 @@ Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.m
 其他直接引用与致谢（完整清单见 [NOTICE](NOTICE)）：
 
 - **[rust-headless-chrome](https://github.com/rust-headless-chrome/rust-headless-chrome)**（MIT）——Chrome DevTools Protocol 客户端。文章页截图的反检测能力（webdriver/chrome/plugins/permissions/webgl 五件套）来自其内置 `enable_stealth_mode()`。
+- **[socialsbase/devto-api](https://github.com/socialsbase/devto-api)**（MIT，`Copyright (c) 2025 socialsbase`）——dev.to 发文渠道 `src/devto.rs` 是它的**精简内联版**：保留其 base URL 常量、`api-key` 认证头、`POST /api/articles`（operationId `createArticle`）调用形状与 201/401/422 分支处理，砍掉 Progenitor 代码生成层、async runtime 与 60+ 用不到的端点，改用本项目既有 blocking reqwest 栈（详见 [NOTICE](NOTICE) 条目 6，附 MIT 许可全文与兼容性说明）。
 - ~~[gautamkrishnar/keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow)~~——原先用它防止 GitHub 60 天无活动自动停用定时任务；该 action 已于 2025-04 被 GitHub 按 ToS 封禁（仓库不存在，job 在 Set up job 就报 "Repository access blocked"），本项目改为 renew.yml 里的自建零依赖 keepalive job。此处保留记录以解释历史。
 - **CSDN 签名常量**（x-ca-key / appSecret）出自 CSDN 前端 JS 内嵌的公开常量，社区解析见[腾讯云社区文章](https://cloud.tencent.com/developer/article/2420128)。
 - **知乎发文流程**参考 [zimya/zhihu_obsidian](https://github.com/zimya/zhihu_obsidian)（0BSD）等社区实现的纯 HTTP 链路（建草稿→写正文→挂话题→发布，无需 x-zse-96 签名）；本项目独立用 Rust 实现，未复制源码，详见 [NOTICE](NOTICE)。
@@ -97,7 +101,7 @@ Linux/macOS 或不想用向导：clone 仓库后照 [docs/SETUP.md](docs/SETUP.m
 
 **免责声明 / Disclaimer（中英全文）**：
 
-1. 本项目仅供学习和个人技术研究使用。使用者应自行确认并遵守阿贝云、三丰云、CSDN、知乎及所使用的所有第三方平台的服务条款与使用规则。
+1. 本项目仅供学习和个人技术研究使用。使用者应自行确认并遵守阿贝云、三丰云、CSDN、知乎、dev.to 及所使用的所有第三方平台的服务条款与使用规则。
 2. 阿贝云、三丰云的免费服务器条款要求用户定期进行推广性质的续期操作。本项目对此类条款的自动化实现可能不被上述厂商认可或允许。**使用本项目产生的一切后果（包括但不限于账号封禁、服务器回收、数据丢失）由使用者自行承担。**
 3. 本项目通过 LLM 生成文章内容。使用者应确保生成内容的发布符合所在平台的内容政策，并在平台上如实声明 AI 辅助生成（本项目默认开启该声明）。使用者不得利用本项目批量制造垃圾内容、刷量或从事其他滥用行为。
 4. 本项目不存储、不上传、不收集任何用户凭据；所有配置仅保存在使用者本地或其私有仓库的 Secrets 中。使用者应妥善保管自己的凭据与 Cookie。

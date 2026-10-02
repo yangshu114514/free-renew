@@ -13,11 +13,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 账户 ID 从 Secret 读：公开仓库里写死一个真实 Cloudflare 账户 ID，
+      # 等于给扫描器白送一个可枚举的定位锚点（配合泄露的 token 才有危害，但没理由送）。
+      # 注意公开仓库的 **Variables 任何人可读**，只有 Secrets 才加密。
       - name: upload sf-monitor script to Cloudflare
         env:
           CF_API_TOKEN: ${{ secrets.CF_DEPLOY_TOKEN }}
-          CF_ACCOUNT_ID: REDACTED_CF_ACCOUNT_ID
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
+          if [ -z "$CF_ACCOUNT_ID" ]; then
+            echo "::error name=cf account missing::Secret CF_ACCOUNT_ID 未配置——无法上传 Worker"
+            exit 1
+          fi
           code=$(curl -sS -o /tmp/resp.json -w "%{http_code}" -X PUT \
             "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/sf-monitor" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
@@ -27,3 +34,39 @@ jobs:
           head -c 1500 /tmp/resp.json
           echo ""
           [ "$code" = "200" ] || exit 1
+
+      # 把敏感配置推成 Worker 的加密 secret（脚本源码里只剩 env.XXX 读取）。
+      # 这样"监控目标域名 / 微信绑定 ID"这类个人资产标识符既不在公开源码里，
+      # 又能在 CI 里自动同步到 Worker——改值只需改 GitHub Secret，重跑本 workflow。
+      # 语法：PUT .../workers/scripts/sf-monitor/secrets，body 为 {"name","text","type"}。
+      - name: push Worker secrets (targets, wechat id)
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_DEPLOY_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          SF_BLOG_URL: ${{ secrets.SF_BLOG_URL }}
+          SF_GATEWAY_URL: ${{ secrets.SF_GATEWAY_URL }}
+          SF_WECHAT_TARGET: ${{ secrets.SF_WECHAT_TARGET }}
+          # 网关 basic auth 用户名。原先代码里是硬编码默认值，现已改从 env 读，
+          # 因此必须由这里保证 Worker 侧有值，否则鉴权头会拼成 "空:密码" 而失败。
+          SF_OC_USER: ${{ secrets.SF_OC_USER }}
+        run: |
+          push_secret() {
+            name="$1"; value="$2"
+            if [ -z "$value" ]; then
+              echo "::warning name=worker secret skipped::$name 未配置——Worker 侧该 env 将为空，对应探测/告警会按代码的降级逻辑处理"
+              return 0
+            fi
+            payload=$(printf '{"name":"%s","text":%s,"type":"secret_text"}' "$name" "$(printf '%s' "$value" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")
+            code=$(curl -sS -o /tmp/sec.json -w "%{http_code}" -X PUT \
+              "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/sf-monitor/secrets" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data "$payload")
+            echo "$name -> HTTP $code"
+            [ "$code" = "200" ] || { head -c 600 /tmp/sec.json; echo ""; exit 1; }
+          }
+          # ⚠️ CF Worker 的 secret 绑定名必须与脚本里 env.XXX 的名字**完全一致**
+          push_secret "SF_BLOG_URL" "$SF_BLOG_URL"
+          push_secret "SF_GATEWAY_URL" "$SF_GATEWAY_URL"
+          push_secret "SF_WECHAT_TARGET" "$SF_WECHAT_TARGET"
+          push_secret "OC_USER" "$SF_OC_USER"

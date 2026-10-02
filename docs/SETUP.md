@@ -6,7 +6,7 @@
 
 GitHub Actions 每天定时拉起本仓库的 Rust 二进制：登录云厂商查续期状态，没到期几秒退出；到期则用 LLM 生成一篇体验文章 → 发布到**内容平台** → 浏览器截图 → 连同截图提交给厂商人工审核。成功/失败通过你配置的通知渠道告警（不配则仅 Actions 页可见）。
 
-发文这一步支持 **CSDN** 和 **知乎** 两个平台：二选一，或**两家都连**（知乎优先、CSDN 自动兜底）。安装时选、之后可换。
+发文这一步支持 **CSDN**、**知乎**、**dev.to** 三个平台：单选或组合（主平台发文失败自动切兜底）。其中 **dev.to 最省心**——走平台官方 API，认证只要一个 API key，没有 Cookie、没有签名、不存在机房 IP 风控问题。安装时选、之后可换。
 
 ## 前置条件
 
@@ -146,6 +146,35 @@ gh variable set PLATFORM_FALLBACK --body "none"
 ```
 
 只配了一家的 Cookie 时**绝不会去试另一家**：`install.ps1` 选单平台会显式写 `PLATFORM_FALLBACK=none`；手动不设该变量时走"自动"语义——只有另一家的 Cookie 也真实存在才会互备。主平台发文失败时自动换兜底平台重发一次（两家都失败才报错），并推通知"已切换"提醒排查主平台。**兜底是保命的，不是免责的**，收到切换通知后要尽快修主平台。截图注入的登录 Cookie 按文章实际所在域选择，切换后不会把知乎 Cookie 带到 CSDN 页面（反之同理）。装好后用 `test_platforms` 输入触发一次"双平台草稿体检"（见第 5 步），确认两条链路都通。
+
+#### 平台 D：dev.to（Forem）
+
+**为什么值得配**：dev.to 走平台**官方 REST API**，认证只要一个 API key——没有 Cookie、没有签名、不用浏览器，也不存在"机房 IP 触发风控"的问题。本项目的所有发文路线里，它是最不容易挂的一条。
+
+1. 打开 <https://dev.to/settings/extensions> → **Generate API Key** → 复制（只显示一次）。
+2. 存成 Secret（**绝不写进 config.toml / 代码 / 脚本**，本仓库是公开的）：
+
+```bash
+gh secret set DEVTO_API_KEY --body "<你的 dev.to API key>"
+```
+
+3. 切成主平台：
+
+```bash
+gh variable set PLATFORM_PROVIDER --body "devto"
+```
+
+4. 标签（可选，dev.to 最多认 4 个；留空用内置默认 `cloud devops vps servers`）：
+
+```bash
+gh variable set DEVTO_TAGS --body "cloud devops vps servers"
+```
+
+装好后用 `test_platforms` 触发一次"草稿体检"（见第 5 步）：dev.to 侧会多出一篇**未发布草稿**，日志给出链接；确认无误后到 dev.to 草稿箱删掉。
+
+> ⚠️ dev.to 的公开 API **没有删除文章的接口**（只有 publish / update / unpublish）。
+> 草稿能在网页端删；已经发出去的正式文章只能在网站后台手动删——别指望用 API 批量清理。
+> 另外 dev.to 的内容政策写明"不以推广/外链为主要目的"，续期文章请保持真实使用体验的写法。
 
 ### 4. 通知（可选，强烈建议）
 

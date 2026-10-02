@@ -303,6 +303,10 @@ fn user_prompt(
     persona: (&str, &str),
 ) -> String {
     let vendor = profile.name;
+    // site_domain() 返回的是**完整域名**（`sanfengyun.com`），末尾不能再拼 `.com`。
+    // 9/18 重构（8d8afc8）把 domain 从裸名 `"sanfengyun"` 换成 site_domain() 时漏改了
+    // 下面模板里的 `{domain}.com`，于是每篇文章都挂上 `https://www.sanfengyun.com.com`
+    // 这条死链——而 check_links 的 contains("sanfengyun.com") 恰好命中，9 天无人察觉。
     let domain = profile.site_domain();
     let (stack, numbers) = persona;
     // 关键词为空时整句跳过：原来的 join 会生成一对空引号 “” 塞进提示词
@@ -320,7 +324,7 @@ fn user_prompt(
         "以【{angle}】为由头，写一篇 {vendor} 免费云服务器长期使用实测，正文 {length} 字左右（不含标题）。\n\n\
          你在这台机器上实际跑着：{stack}。观测到的资源情况：{numbers}。\
          把这些事实自然织进文章（可改写措辞、可补同类细节，但数字必须与这些观测一致）。\n\
-         {kw_clause}官网 https://www.{domain}.com（融进句子，别单列一行）。\n\
+         {kw_clause}官网 https://www.{domain}（融进句子，别单列一行）。\n\
          {forbidden_clause}\
          涉及续期时，明确写清周期和操作方式；不得暗示它是生产级高可用方案，\
          必须强调轻量/实验/备用属性。\n\
@@ -396,13 +400,30 @@ fn check_vendor(text: &str, profile: &CloudProfile, lowered: &str) -> Vec<String
 
 /// 官网链接必须与本次续期厂商一致：给阿贝云的文章带三丰云链接，厂商人工审核
 /// 会判"文章与申请不符"直接拒。
+///
+/// 另：域名后**紧跟字母**说明后缀被拼了两遍（`www.sanfengyun.com.com`）——那是条
+/// 死链，而 `contains(want)` 恰好命中，历史上整整 9 天每篇都带着它发出去。
 fn check_links(lowered: &str, profile: &CloudProfile) -> Vec<String> {
     let want = profile.site_domain();
-    if lowered.contains(&want) {
-        vec![]
-    } else {
-        vec![format!("缺少/错挂官网链接（本次厂商要求含 {want}）")]
+    if !lowered.contains(&want) {
+        return vec![format!("缺少/错挂官网链接（本次厂商要求含 {want}）")];
     }
+    let dup = format!("{want}.");
+    let mut problems = Vec::new();
+    if let Some(idx) = lowered.find(&dup) {
+        // 命中 `want.` 后看下一个字符：`/`、空白、中文标点都是正常 URL 结尾，
+        // 只有 ASCII 字母才意味着又接了一个 TLD（.com.com）
+        if lowered[idx + dup.len()..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
+        {
+            problems.push(format!(
+                "官网域名疑似重复后缀（{want}.…）——模板把已含后缀的域名又拼了一遍，实际是死链"
+            ));
+        }
+    }
+    problems
 }
 
 fn check_keywords(text: &str, required: &[String]) -> Vec<String> {
@@ -875,5 +896,45 @@ mod tests {
         assert!(prompt.contains("https://www.sanfengyun.com"));
         assert!(prompt.contains("三丰云"));
         assert!(!prompt.contains("阿贝云"), "提示词里不得出现别家厂商");
+    }
+
+    #[test]
+    fn prompt_link_is_not_double_suffixed() {
+        // 旧断言只查 contains("https://www.sanfengyun.com")，而
+        // "https://www.sanfengyun.com.com" 恰好以它开头——所以模板把后缀拼两遍时
+        // 测试照样全绿，死链就这么发了 9 天。这里改成"不得出现 {完整域名}.com"。
+        for key in ["sanfengyun", "abeiyun"] {
+            let p = profile(key);
+            let prompt = user_prompt("角度", 1500, p, &[], &[], ("栈", "数字"));
+            let bad = format!("https://www.{}.com", p.site_domain());
+            assert!(
+                !prompt.contains(&bad),
+                "{key} 提示词里出现重复后缀死链 {bad}"
+            );
+            assert!(
+                prompt.contains(&format!("https://www.{}", p.site_domain())),
+                "{key} 提示词缺少正确官网链接"
+            );
+        }
+    }
+
+    #[test]
+    fn double_suffixed_domain_is_rejected() {        // 死链必须被拦下：contains("sanfengyun.com") 对 sanfengyun.com.com 恒真
+        let mut s = ok_body();
+        s.push_str("官网 https://www.sanfengyun.com.com 文档更新及时");
+        let problems = validate(&s, profile("sanfengyun"), &[], &[], DEFAULT_LENGTHS);
+        assert!(
+            problems.iter().any(|p| p.contains("重复后缀")),
+            "漏拦 .com.com 死链: {problems:?}"
+        );
+
+        // 正常 URL 结尾（斜杠、空白、中文标点）不得误杀
+        let mut ok = ok_body();
+        ok.push_str("官网 https://www.sanfengyun.com/ 和 https://www.sanfengyun.com（都在用）");
+        let problems = validate(&ok, profile("sanfengyun"), &[], &[], DEFAULT_LENGTHS);
+        assert!(
+            !problems.iter().any(|p| p.contains("重复后缀")),
+            "误杀正常官网链接: {problems:?}"
+        );
     }
 }

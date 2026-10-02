@@ -6,6 +6,10 @@
 //!
 //! 错误码实测：所有 cmd 未登录时一律 50140 尚未登录。
 //! 阿贝云 HTTPS 对境外 IP 挂 WAF，HTTP 80 实测通——自动降级。
+//!
+//! ⚠️ **HTTP 降级 = 凭据明文过网**：降级路径上 login 的 username/password
+//! 是明文传输的，不是加密通道。取舍与影响面详见 [`CloudClient::candidate_urls`]
+//! 的安全警示；这是如实披露的已知取舍，不是可以忽略的细节。
 
 use std::time::Duration;
 
@@ -84,6 +88,17 @@ impl CloudClient {
     }
 
     /// https 失败自动降级 http（阿贝云境外 WAF 特供）
+    ///
+    /// ⚠️ **安全警示：降级后的请求是明文的**。登录（`login.php` 的
+    /// `username`/`password` 表单字段）与凭据相关请求在候选落到 `http://`
+    /// 时，会以**明文过网**——任何路径上的中间人都能读到这台机器的厂商登录密码。
+    /// 这是"境外 IP 被 WAF 拦"这个现实约束下的取舍，**不是无代价的兼容层**：
+    /// - 影响面仅限 `allow_http_fallback` 为真的 profile（当前只有阿贝云）；
+    /// - 触发条件是 HTTPS 端点先失败（WAF 拦截/线路不通），并非默认路径；
+    /// - 关掉它（`allow_http_fallback = false`）换来的代价是境外机器上该厂商
+    ///   完全无法续期——所以这里只做**如实披露**，把取舍留给部署者，不静默改行为。
+    ///
+    /// 若日志里看到 `http://` 候选被采用，就该知道那一轮的凭据是明文走的。
     fn candidate_urls(&self, url: &str) -> Vec<String> {
         let mut urls = vec![url.to_string()];
         if self.account.profile.allow_http_fallback {

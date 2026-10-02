@@ -24,10 +24,15 @@ use crate::http::truncate_chars;
 /// openclaw 后端超时：2026-09-29 起走 /tools/invoke 工具直调（不经 LLM agent），
 /// 同步秒级返回 deliveryStatus，30s 足够覆盖微信通道发送。
 const OPENCLAW_TIMEOUT_SECS: u64 = 30;
-/// free-renew 通知的微信绑定目标：裸 "<id>@im.wechat" 是唯一合法格式
-/// （加 user: 前缀 ret=-3、残缺 ID 也 ret=-3——2026-09-09 实测）。
-/// 与 sf-monitor Worker 告警用同一绑定 ID（该 ID 亦存于 agent 记忆）；改绑定时两处同步。
-const OPENCLAW_WECHAT_TARGET: &str = "REDACTED_WECHAT_TARGET";
+/// 微信绑定目标的**环境变量名**（值本身不再进源码）。
+///
+/// 曾经这里是 `const OPENCLAW_WECHAT_TARGET = "<id>@im.wechat"` 硬编码——但这个
+/// 裸 ID 是可关联到个人微信账号的标识符，而本仓库是**公开**的，等于把一个指向
+/// 具体自然人的坐标写进公开源码。现在改由 `NOTIFY_WECHAT_TARGET`（GitHub Actions
+/// Secret）注入：源码里只剩变量名，值只存在于加密的 Secret 与运行时内存。
+/// 与 sf-monitor Worker 告警用同一绑定 ID，改绑定时两处同步（Worker 侧见
+/// deploy-worker.yml 推送的 Worker secret）。格式要求不变：裸 "<id>@im.wechat"。
+const WECHAT_TARGET_ENV: &str = "NOTIFY_WECHAT_TARGET";
 /// pushplus 后端超时（同步等应答，code=200 才算送达）。
 const PUSHPLUS_TIMEOUT_SECS: u64 = 15;
 /// webhook 后端超时。
@@ -58,7 +63,7 @@ pub fn send(cfg: &NotifyConfig, title: &str, detail: &str) {
     // 网关链路长期 403 时停用，避免每次告警都白白消耗一次 pushplus 兜底名额。
     let openclaw_enabled = std::env::var("NOTIFY_OPENCLAW_ENABLED")
         .ok()
-        .map(|v| !v.trim().is_empty() && v.trim().to_ascii_lowercase() != "false")
+        .map(|v| !v.trim().is_empty() && !v.trim().eq_ignore_ascii_case("false"))
         .unwrap_or(true);
     if let Some(oc) = &cfg.openclaw {
         if !openclaw_enabled {
@@ -107,6 +112,8 @@ fn http_client(timeout_secs: u64) -> Option<reqwest::blocking::Client> {
 /// 返回 true = 已交给网关（fire-and-forget，实际送达以微信为准）；
 /// false = 明确没接单（缺配置/鉴权失败/连不上），值得让 webhook 再试一次。
 fn send_openclaw(oc: &OpenClawNotify, title: &str, detail: &str) -> bool {
+    // 绑定目标从 Secret 注入（源码不再携带个人标识符）
+    let wechat_target = std::env::var(WECHAT_TARGET_ENV).unwrap_or_default();
     // 空配置会白发一次注定失败的请求，而且排障时分不清是"没配"还是"被网关拒"
     let missing: Vec<&str> = [
         (oc.url.trim().is_empty(), "NOTIFY_OPENCLAW_URL"),
@@ -115,6 +122,7 @@ fn send_openclaw(oc: &OpenClawNotify, title: &str, detail: &str) -> bool {
             oc.basic_password.trim().is_empty(),
             "NOTIFY_OPENCLAW_PASSWORD",
         ),
+        (wechat_target.trim().is_empty(), WECHAT_TARGET_ENV),
     ]
     .into_iter()
     .filter_map(|(absent, name)| absent.then_some(name))
@@ -140,7 +148,7 @@ fn send_openclaw(oc: &OpenClawNotify, title: &str, detail: &str) -> bool {
         "action": "send",
         "args": {
             "channel": "openclaw-weixin",
-            "target": OPENCLAW_WECHAT_TARGET,
+            "target": wechat_target,
             "text": text,
         },
         "sessionKey": "main",

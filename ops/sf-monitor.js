@@ -2,17 +2,30 @@
 // 探测: 博客(200) / 龙虾链路(401门=活) / 龙虾服务(Basic 深探, 非5xx=活)
 // 告警: 状态翻转 + 30 分钟限频; GET /run 只检查, /run?push=1 推测试消息
 // Source: https://developers.cloudflare.com/workers/configuration/cron-triggers/
+//
+// ⚠️ 监控目标与微信绑定 ID **不在本文件里**：这是公开仓库，具体域名/个人标识符
+// 会直接暴露你的资产拓扑。三者从 Worker 的加密 secret 读取（由 deploy-worker.yml
+// 从 GitHub Secrets 自动推送）：SF_BLOG_URL / SF_GATEWAY_URL / SF_WECHAT_TARGET。
+// 未配置时该目标被跳过并计入 rows（带 MISSING 标记），监控仍然工作、只是少一路。
 const T = [
-  { k: "博客", url: "https://REDACTED_BLOG_DOMAIN/", ok: [200] },
-  { k: "龙虾链路", url: "https://REDACTED_GATEWAY_DOMAIN/", ok: [200, 401, 403, 302] }
+  { k: "博客", envKey: "SF_BLOG_URL", ok: [200] },
+  { k: "龙虾链路", envKey: "SF_GATEWAY_URL", ok: [200, 401, 403, 302] }
 ]
 
+// 解析真实 URL：secret 未配置 → 返回 null（该探测项跳过，而不是拿空串去 fetch）
+function targetUrl(t, env) {
+  const v = (env[t.envKey] || "").trim()
+  return v ? v : null
+}
+
 async function probe(t, env) {
+  const url = targetUrl(t, env)
+  if (!url) return { k: t.k + "(MISSING " + t.envKey + ")", code: 0, err: "secret 未配置", ok: false, skipped: true }
   let code = 0, err = ""
   const ctl = new AbortController()
   const timer = setTimeout(() => ctl.abort(), 25000)
   try {
-    const r = await fetch(t.url, { method: "GET", redirect: "follow", signal: ctl.signal })
+    const r = await fetch(url, { method: "GET", redirect: "follow", signal: ctl.signal })
     code = r.status
   } catch (e) { err = String(e).slice(0, 60) }
   finally { clearTimeout(timer) }
@@ -20,12 +33,14 @@ async function probe(t, env) {
 }
 
 async function probeSvc(env) {
+  const gwUrl = (env.SF_GATEWAY_URL || "").trim()
+  if (!gwUrl) return { k: "龙虾服务(MISSING SF_GATEWAY_URL)", code: 0, err: "secret 未配置", ok: false }
   let code = 0, err = ""
   const ctl = new AbortController()
   const timer = setTimeout(() => ctl.abort(), 60000)
   try {
-    const auth = "Basic " + btoa((env.OC_USER || "freerenew") + ":" + (env.OC_PASS || ""))
-    const r = await fetch("https://REDACTED_GATEWAY_DOMAIN/v1/chat/completions", {
+    const auth = "Basic " + btoa((env.OC_USER || "") + ":" + (env.OC_PASS || ""))
+    const r = await fetch(gwUrl.replace(/\/$/, "") + "/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": auth },
       body: JSON.stringify({ model: "openclaw", messages: [{ role: "user", content: "ping" }], max_tokens: 1 }),
@@ -73,16 +88,21 @@ async function monitor(env, force) {
       pushed += ppOk ? 1 : 0
     } catch (e) { pushed = -1 }
     // 双通道②: openclaw 龙虾代告 (仅龙虾服务层可达时; 挂掉则自然只剩 PushPlus)
-    if (env.OC_PASS && rows.find(r2 => r2.k === "龙虾服务" && r2.ok)) {
+    // 网关地址与微信绑定 ID 同样来自 Worker secret，不写进本文件。
+    const gwUrl = (env.SF_GATEWAY_URL || "").trim()
+    const wxTarget = (env.SF_WECHAT_TARGET || "").trim()
+    if (env.OC_PASS && gwUrl && wxTarget && rows.find(r2 => r2.k === "龙虾服务" && r2.ok)) {
       try {
-        const auth = "Basic " + btoa((env.OC_USER || "freerenew") + ":" + env.OC_PASS)
-        const msg = "监控告警转发: 用 message 工具 send 到微信 REDACTED_WECHAT_TARGET, 正文: " + m.title + "\n" + m.body.replace(/<pre>/g, "").replace(/<\/pre>/g, "") + " (PushPlus 已同步推送)。成功只回:已发送。"
-        await fetch("https://REDACTED_GATEWAY_DOMAIN/v1/chat/completions", {
+        const auth = "Basic " + btoa((env.OC_USER || "") + ":" + env.OC_PASS)
+        const msg = "监控告警转发: 用 message 工具 send 到微信 " + wxTarget + ", 正文: " + m.title + "\n" + m.body.replace(/<pre>/g, "").replace(/<\/pre>/g, "") + " (PushPlus 已同步推送)。成功只回:已发送。"
+        await fetch(gwUrl.replace(/\/$/, "") + "/v1/chat/completions", {
           method: "POST",
           headers: { "Content-Type": "application/json", "Authorization": auth },
           body: JSON.stringify({ model: "openclaw", messages: [{ role: "user", content: msg }], max_tokens: 200, stream: false })
         })
       } catch (e2) { /* 网关不可达 = 静默, PushPlus 已是主通道 */ }
+    } else if (env.OC_PASS && gwUrl && !rows.find(r2 => r2.k === "龙虾服务" && r2.ok)) {
+      /* 服务层本就挂了：不再试图转发，PushPlus 是唯一通道 */
     }
     if (!force) await cache.put(KEY, new Response(JSON.stringify({ state: failed.length ? "down" : "up", lastPush: now })))
   }
@@ -93,12 +113,20 @@ self.addEventListener("fetch", event => {
   event.respondWith((async req => {
     // 公网入口鉴权: 所有 HTTP 路径要求 Authorization: Bearer <AUTH_TOKEN> (cron 定时不受此限)
     const at = req.headers.get("Authorization") || ""
-    if (at !== "Bearer " + (globalThis.AUTH_TOKEN || "")) return new Response("unauthorized", { status: 401 })
+    const required = globalThis.AUTH_TOKEN || ""
+    // AUTH_TOKEN **未绑定时必须拒绝，而不是放行**。
+    // 旧写法 `at !== "Bearer " + (AUTH_TOKEN || "")` 在未配置时等价于
+    // 只要请求头写成 `Bearer `（空值）就能通过——即 /run、/t2 对公网零门槛，
+    // 任何人可白嫖 PushPlus 配额并触发网关 POST。未配置 = 拒绝（fail closed）。
+    if (!required) return new Response("server not configured (AUTH_TOKEN unset)", { status: 503 })
+    if (at !== "Bearer " + required) return new Response("unauthorized", { status: 401 })
     const u = new URL(req.url)
     if (u.pathname === "/") return new Response("sf-monitor alive (GET /run to check)")
     if (u.pathname === "/t2") {
+      const blogUrl = (globalThis.SF_BLOG_URL || "").trim()
+      if (!blogUrl) return new Response("blog fetch: SF_BLOG_URL secret 未配置", { status: 503 })
       try {
-        const r = await fetch("https://REDACTED_BLOG_DOMAIN/", { redirect: "follow" })
+        const r = await fetch(blogUrl, { redirect: "follow" })
         return new Response("blog fetch: " + r.status)
       } catch (e) {
         return new Response("blog fetch ERR: " + String(e).slice(0, 300))

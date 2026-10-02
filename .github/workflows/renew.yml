@@ -198,6 +198,18 @@ jobs:
       ZHIHU_COOKIES: ${{ secrets.ZHIHU_COOKIES }}
       # 知乎发文话题（可选，空格分隔；留空用内置默认"免费云服务器 虚拟主机"）
       ZHIHU_TOPICS: ${{ vars.ZHIHU_TOPICS }}
+      # ── dev.to（Forem）────────────────────────────────────────────────
+      # 平台官方 REST API，认证只要一个 API key（dev.to/settings/extensions 生成）。
+      # ⚠️ 必须走 Secret：本仓库是 **公开** 的，key 绝不能写进 config.toml、代码或脚本。
+      DEVTO_API_KEY: ${{ secrets.DEVTO_API_KEY }}
+      # 文章标签（可选，空格/逗号分隔；留空用内置默认 cloud devops vps servers）
+      DEVTO_TAGS: ${{ vars.DEVTO_TAGS }}
+      # ── 博客园（配置层已就绪，发布分派尚未接通）──────────────────────
+      CNBLOGS_USERNAME: ${{ vars.CNBLOGS_USERNAME }}
+      CNBLOGS_TOKEN: ${{ secrets.CNBLOGS_TOKEN }}
+      CNBLOGS_BLOG_USER: ${{ vars.CNBLOGS_BLOG_USER }}
+      CNBLOGS_TAGS: ${{ vars.CNBLOGS_TAGS }}
+      CNBLOGS_CATEGORIES: ${{ vars.CNBLOGS_CATEGORIES }}
       # ── 通知 ──────────────────────────────────────────────────────────
       # 走 SSH 隧道直连服务器 openresty（上方 "Setup SSH tunnel" step 建立；绕开 CF challenge）
       # /tools/invoke = 网关工具直调端点（不经 LLM agent，同步返回 deliveryStatus）
@@ -216,6 +228,10 @@ jobs:
       #    选 webhook 的用户一条通知都收不到，而且全程没有任何报错。
       #    现在有 tests::every_env_var_the_program_reads_is_wired_in_the_workflow 守着。
       NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
+      # 微信绑定目标（openclaw message 工具的 target）。走 Secret 而非常量/变量：
+      # 这是可关联到个人微信账号的标识符，本仓库公开——值只能存在于加密 Secret 里。
+      # 公开仓库的 **Variables 任何人可读**，只有 Secrets 才是加密的。
+      NOTIFY_WECHAT_TARGET: ${{ secrets.NOTIFY_WECHAT_TARGET }}
       # 通知标签（可选，webhook 后端用；留空用内置默认 renewal）
       NOTIFY_TAG: ${{ vars.NOTIFY_TAG }}
       # ── 可选调优（留空即用内置默认；都是 Variable，非敏感）────────────
@@ -245,23 +261,32 @@ jobs:
       - name: Build (release)
         run: cargo build --release --locked
 
-      # SSH 隧道直连服务器 openresty（绕开 Cloudflare 对数据中心 IP 的 Bot Fight Mode challenge）
-      # 18081 -> 服务器 127.0.0.1:8081(openresty, shuyang.conf catch-all server_name)，
-      # nginx basic auth(freerenew) + 无 XFF 时 map 给 192.0.2.50 虚拟终态客户端（网关归因通过，kb-mcp 同款机制）
+      # SSH 隧道直连服务器 openresty（绕开 Cloudflare 对数据中心 IP 的 Bot Fight Mode challenge）。
+      # 结构：本地 18081 → 服务器回环上的 openresty（catch-all server_name 配置）→ 网关。
+      # openresty 上挂 nginx basic auth，凭据在 Secret 里；无 XFF 时给虚拟终态客户端归因，
+      # 网关侧才认这次调用（kb-mcp 同款机制）。
+      # ⚠️ 主机地址与 SSH 端口**不写进本文件**：这是公开仓库，具体 IP/端口会让
+      #    暴力破解与横向探测的成本大幅下降，因此从 secrets 注入（与私钥同级）。
       - name: Setup SSH tunnel (notify bypass CF)
         continue-on-error: true
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          NOTIFY_SSH_HOST: ${{ secrets.NOTIFY_SSH_HOST }}
+          NOTIFY_SSH_PORT: ${{ secrets.NOTIFY_SSH_PORT }}
         run: |
+          if [ -z "$NOTIFY_SSH_HOST" ]; then
+            echo "::warning name=tunnel skipped::NOTIFY_SSH_HOST 未配置——跳过隧道建立；openclaw 通知将失败并降级到 pushplus"
+            exit 0
+          fi
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_sf
           chmod 600 ~/.ssh/id_sf
           ssh -f -N -L 18081:127.0.0.1:8081 \
-            -i ~/.ssh/id_sf -p 520 \
+            -i ~/.ssh/id_sf -p "${NOTIFY_SSH_PORT:-22}" \
             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-            root@REDACTED_SSH_HOST
+            "root@${NOTIFY_SSH_HOST}"
           echo "tunnel ready -> 127.0.0.1:18081"
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
 
       # 诊断步骤：runner 侧直接实测 LLM 连通性（值被 GitHub 自动打码，长度可读）。
       # 用于定位 401 类问题：区分“Secret 为空/带脏字符”与“厂商侧拒绝”。

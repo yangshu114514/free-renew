@@ -82,7 +82,7 @@ fn test_notify(cfg: &AppConfig, run: &RunContext) -> Result<()> {
     let has_pp = !cfg.notify.pushplus_token.trim().is_empty();
     let openclaw_enabled = std::env::var("NOTIFY_OPENCLAW_ENABLED")
         .ok()
-        .map(|v| !v.trim().is_empty() && v.trim().to_ascii_lowercase() != "false")
+        .map(|v| !v.trim().is_empty() && !v.trim().eq_ignore_ascii_case("false"))
         .unwrap_or(true);
     if cfg.notify.openclaw.is_none() && !has_pp && cfg.notify.webhook_url.is_empty() {
         run.event(
@@ -239,8 +239,17 @@ fn test_platforms(cfg: &AppConfig, run: &RunContext) -> Result<()> {
     if cfg.csdn.as_ref().map(|c| c.ready()).unwrap_or(false) {
         tried.push(("csdn", publish_on(cfg, "csdn", who, &article, false)));
     }
+    if cfg.devto.as_ref().map(|d| d.ready()).unwrap_or(false) {
+        tried.push(("devto", publish_on(cfg, "devto", who, &article, false)));
+    }
+    if cfg.cnblogs.as_ref().map(|c| c.ready()).unwrap_or(false) {
+        tried.push(("cnblogs", publish_on(cfg, "cnblogs", who, &article, false)));
+    }
     if tried.is_empty() {
-        bail!("两个发文平台的 Cookie 都没配置，没有可体检的链路（跑 install.ps1 或采集脚本）");
+        bail!(
+            "没有已就绪的发文平台，没有可体检的链路\
+             （配 CSDN_COOKIES / ZHIHU_COOKIES / DEVTO_API_KEY，或 CNBLOGS_USERNAME+CNBLOGS_TOKEN）"
+        );
     }
     let mut ok_any = false;
     for (p, r) in tried {
