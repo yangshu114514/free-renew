@@ -410,18 +410,25 @@ $backend = Ask "选择 (默认 1)" "1"
 if ($backend -eq "") { $backend = "1" }
 if ($backend -eq "1") {
     Write-Host "需要: 一台跑 OpenClaw 的服务器 + 公网可达的 /v1/chat/completions 端点 + basic auth bot 账号。"
-    Write-Host "三个值将以 Secrets 形式存入你的仓库，Actions 运行时作为环境变量生效，无需 config.toml。"
+    Write-Host "四个值将以 Secrets 形式存入你的仓库，Actions 运行时作为环境变量生效，无需 config.toml。"
     Write-Host "接线步骤见: docs/SETUP.md 的「OpenClaw 网关通知」一节"
     Guard "打开 SETUP.md 通知章节" { Start-Process "https://github.com/$UPSTREAM/blob/main/docs/SETUP.md" 2>$null }
     $ocUrl  = Ask "chatCompletions 完整 URL (如 https://你的域名或IP:端口/v1/chat/completions)" "https://example.com/v1/chat/completions"
     $ocUser = Ask "basic auth 用户名" "botuser"
     $ocPass = Ask "basic auth 密码" "botpass"
-    if ([string]::IsNullOrWhiteSpace($ocUrl) -or [string]::IsNullOrWhiteSpace($ocUser) -or [string]::IsNullOrWhiteSpace($ocPass)) {
-        Warn "URL/用户名/密码存在空值——空配置不会生效，本次已跳过通知写入。可重跑向导或手动 gh secret set"
+    # 微信绑定目标。曾经它是源码里的硬编码常量（等于把可关联到个人微信的
+    # 标识符写进公开仓库），现在改为必填 Secret——缺了它 openclaw 通道发不出去，
+    # 所以这里必须采集，不能留空。
+    $ocTarget = Ask "微信绑定目标（裸 <id>@im.wechat 格式；网关 message 工具的 target）" ""
+    if ([string]::IsNullOrWhiteSpace($ocUrl) -or [string]::IsNullOrWhiteSpace($ocUser) -or
+        [string]::IsNullOrWhiteSpace($ocPass) -or [string]::IsNullOrWhiteSpace($ocTarget)) {
+        Warn "URL/用户名/密码/微信目标 存在空值——空配置不会生效，本次已跳过通知写入。可重跑向导或手动 gh secret set"
+        Warn "特别是 NOTIFY_WECHAT_TARGET：缺它 openclaw 通道会明确报缺项并降级到 pushplus"
     } else {
         Set-GhSecret "NOTIFY_OPENCLAW_URL"      $ocUrl
         Set-GhSecret "NOTIFY_OPENCLAW_USER"     $ocUser
         Set-GhSecret "NOTIFY_OPENCLAW_PASSWORD" $ocPass
+        Set-GhSecret "NOTIFY_WECHAT_TARGET"     $ocTarget
         $notifyStatus = "OpenClaw→微信（Secrets 已写入）"
         $ans = Ask "发一条测试通知验证链路? agent 会真发微信给你 (默认 N)" "N"
         if ($ans -match "^[yY]" -and -not $DryRun) {

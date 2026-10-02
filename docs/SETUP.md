@@ -215,15 +215,19 @@ cron 默认 `7 * * * *`——**每小时的第 7 分钟**，刻意避开整点�
 1. 网关配置开启：`"gateway": { "http": { "endpoints": { "chatCompletions": { "enabled": true } } } }`
 2. 反代给 `/v1/` 加 basic auth（用其它暴露方式时认证手段同理自选）。
 3. 拿微信 target：给 agent 发「用 message 工具给微信发一条测试消息，告诉我完整 target」。target 形状 `xxxx@im.wechat`，**裸 ID、无 `user:` 前缀**（加前缀会 ret=-3）。
-4. 填三个 Secret：
+4. 填四个 Secret：
 
 ```bash
 gh secret set NOTIFY_OPENCLAW_URL      --body "https://你的域名或IP:端口/v1/chat/completions"
 gh secret set NOTIFY_OPENCLAW_USER     --body "bot用户名"
 gh secret set NOTIFY_OPENCLAW_PASSWORD --body "bot密码"
+# 第 3 步拿到的 target。**必须单独存**：它曾是源码里的硬编码常量，
+# 但那等于把可关联到你个人微信的标识符写进公开仓库——现在只存在于加密 Secret。
+# 缺这个 Secret 时 openclaw 通道会明确报「缺 NOTIFY_WECHAT_TARGET」并降级到 pushplus。
+gh secret set NOTIFY_WECHAT_TARGET     --body "xxxx@im.wechat"
 ```
 
-5. 验证：本地设好这三个环境变量（或写好 config.toml 的 `[notify.openclaw]`）后跑 `./target/release/free-renew --test-notify`，或直接 Actions 手动 Run 看是否收到微信。两种途径等价（Secrets 即 Actions 环境变量，与 config.toml 二选一即可）。
+5. 验证：本地设好这四个环境变量（或写好 config.toml 的 `[notify.openclaw]`，微信 target 只走环境变量）后跑 `./target/release/free-renew --test-notify`，或直接 Actions 手动 Run 看是否收到微信。两种途径等价（Secrets 即 Actions 环境变量，与 config.toml 二选一即可）。
 
 ---
 
