@@ -50,6 +50,11 @@ enum AccountOutcome {
     Renewed,
     /// 本轮无事可做（未到期/审核中/状态未识别），不算失败
     Skipped,
+    /// 本轮因**网络/临时**原因未完成。程序幂等、续费窗口约 5 天、定时任务每小时都会
+    /// 再试，所以**不需要人工介入**——报成 NeedHuman 是误报，会把真正的凭据失效
+    /// 淹没在噪音里（2026-10-03：定时续期 17 次里 7 次挂在厂商连接超时，每次都推
+    /// "需要人工介入"）。
+    Transient,
     /// 出问题了，需要人工介入
     NeedHuman,
 }
@@ -82,7 +87,48 @@ fn who(account: &CloudAccount) -> String {
     format!("[{} {}]", account.id, account.label)
 }
 
-/// 阶段失败的统一出口：写事件 + 发通知 + 标记需人工介入。
+/// 本轮失败是不是**网络/临时**性质（= 不需要人动手）。
+///
+/// 为什么必须区分：2026-10-03 实测定时续期 17 次里 7 次挂在 `api.sanfengyun.com`
+/// 连接超时（10 次尝试全超时，https/http 都试过），而程序把它归成 `NeedHuman` 并推
+/// "需要人工介入"——**误报**。网络抖动不需要人做任何事：程序幂等、续费窗口约 5 天、
+/// 每小时都会再试，下次自然就过了。把这种失败报成"需要人工介入"，代价是真正的
+/// 凭据失效/账号异常淹没在噪音里。
+///
+/// 判据保守（宁可不判 transient，也不要把"该人管的事"说成"没事"）：
+///   1. 错误链里出现**确定性 HTTP 拒绝**（400/404/405/406/410/422，与 cloud.rs 的
+///      `is_deterministic_reject` 同一套码）→ 不是 transient
+///   2. 否则出现网络症状关键词 → transient
+///   3. 都不匹配 → 不是 transient（未知按"需要人处理"，安全侧）
+fn is_transient_network_error(err: &anyhow::Error) -> bool {
+    // {err:#} 展开完整错误链：网络症状（连接超时/DNS/TLS）常常裹在内层 cause 里
+    let chain = format!("{err:#}").to_lowercase();
+
+    const DETERMINISTIC: [&str; 6] = [
+        "http 400", "http 404", "http 405", "http 406", "http 410", "http 422",
+    ];
+    if DETERMINISTIC.iter().any(|k| chain.contains(k)) {
+        return false;
+    }
+
+    const NETWORK: [&str; 12] = [
+        "error sending request",     // reqwest 发送失败的通用外层措辞
+        "operation timed out",       // connect 超时（本次事故的原话）
+        "timed out",
+        "timeout",
+        "connection refused",
+        "connection reset",
+        "connection aborted",
+        "dns error",
+        "failed to lookup address",
+        "unexpected eof",            // TLS 被中途切断
+        "handshake",
+        "读取响应体失败",             // cloud.rs 在重试循环里收集的那条
+    ];
+    NETWORK.iter().any(|k| chain.contains(k))
+}
+
+/// 阶段失败的统一出口：写事件 + 发通知 + 标记结果（网络临时失败 vs 需人工介入）。
 ///
 /// 这段样板在改造前被复制了 5 遍（main 里 5 处 + probe 里 1 处）；想给所有失败
 /// 路径加"补一次重试"或改通知格式，就得改 6 个地方，漏一处就是某条失败路径静默无声。
@@ -97,15 +143,35 @@ fn fail<T>(
     // {e:#} 打印完整错误链：失败必须看到根因（超时/连接重置/HTTP 码），
     // 只 to_string() 会退化成一句"失败了"，下次还是查不出为什么
     let detail = format!("{err:#}");
-    tracing::error!("{} {what}失败: {detail}", who(account));
+    let transient = is_transient_network_error(err);
+    if transient {
+        tracing::warn!("{} {what}未完成（网络原因，非故障）: {detail}", who(account));
+    } else {
+        tracing::error!("{} {what}失败: {detail}", who(account));
+    }
     run.event(
         &step_name(account, step),
-        "failed",
+        // 事件状态分开记：事后统计"多少次是网络抖动、多少次真要人管"时，
+        // 全塞进 failed 会让这个区分再次丢失
+        if transient { "transient" } else { "failed" },
         json!({
             "account": account.id, "vendor": account.vendor(), "label": account.label,
-            "error": detail,
+            "error": detail, "transient": transient,
         }),
     );
+    if transient {
+        // 通知措辞必须准确：说"失败/需要人工介入"是误报，用户会去查一个根本不需要
+        // 他管的东西。这里明确讲清"下次自动重试、无需人工介入"。
+        notify::send(
+            &cfg.notify,
+            &format!("⏳ {} {what}未完成（网络原因，无需人工介入）", account.label),
+            &format!(
+                "{detail}\n\n这不是故障：本轮没连上厂商。程序幂等，下次定时任务会自动重试\
+                 （续费窗口约 5 天，每小时都会再试一次），**无需人工介入**。"
+            ),
+        );
+        return Step::Done(AccountOutcome::Transient);
+    }
     notify::send(
         &cfg.notify,
         &format!("{} {what}失败", account.label),
@@ -859,12 +925,14 @@ fn main() -> Result<()> {
     // 曾经的 unwrap_or(false) 把 Err 静默降级成"未成功"——日志里连一行根因都不留。
     let mut renewed = 0usize;
     let mut skipped = 0usize;
+    let mut transient = 0usize;
     let mut failures = 0usize;
     for account in &cfg.accounts {
         tracing::info!("--- 账号 {} ({}) ---", account.id, account.label);
         match process_account(&cfg, &run, account) {
             Ok(AccountOutcome::Renewed) => renewed += 1,
             Ok(AccountOutcome::Skipped) => skipped += 1,
+            Ok(AccountOutcome::Transient) => transient += 1,
             Ok(AccountOutcome::NeedHuman) => failures += 1,
             Err(e) => {
                 let detail = format!("{e:#}");
@@ -886,11 +954,33 @@ fn main() -> Result<()> {
         "accounts": cfg.accounts.len(),
         "renewed": renewed,
         "skipped": skipped,
+        "transient": transient,
         "failures": failures,
     });
     if failures > 0 {
         run.event("run.end", "failed", summary);
+        // 两种失败必须分开报：把网络抖动也算进"需要人工介入"，真正的凭据失效就会被淹没
+        if transient > 0 {
+            anyhow::bail!(
+                "{failures} 个账号需要人工介入；另有 {transient} 个账号本轮因网络原因未完成\
+                 （非故障，下次定时任务自动重试）"
+            );
+        }
         anyhow::bail!("{failures} 个账号需要人工介入");
+    }
+    // 纯网络原因未完成 → **不判失败**（退出码 0）。
+    //
+    // 判红会把"厂商抖了一下"变成 GitHub 的失败邮件 + 一遍遍假警报，而程序幂等、
+    // 续费窗口约 5 天、定时任务每小时都重试——本来就不需要人管任何事。
+    // 也**不是静默**：fail() 里已经推过措辞明确的通知（"⏳ …未完成（网络原因，无需人工介入）"），
+    // 厂商持续不可达时用户会连续收到它，那才是真正该看的信号。
+    if transient > 0 {
+        run.event("run.end", "ok", summary);
+        tracing::warn!(
+            "=== free-renew 结束，耗时 {} 秒（续期 {renewed}／跳过 {skipped}／网络原因未完成 {transient}）===",
+            run.elapsed_secs()
+        );
+        return Ok(());
     }
     run.event("run.end", "ok", summary);
     tracing::info!(
@@ -904,6 +994,70 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::{CsdnConfig, NotifyConfig, ZhihuConfig};
+
+    /// 事故原文回归：2026-10-03 定时续期 17 次里 7 次挂在厂商连接超时，
+    /// 程序却把它归成 `NeedHuman` 并推"需要人工介入"——这是误报。
+    #[test]
+    fn connect_timeout_is_transient_not_need_human() {
+        let e = anyhow::anyhow!(
+            "error sending request for url (http://api.sanfengyun.com/www/login.php): \
+             client error (Connect): operation timed out"
+        )
+        .context("请求失败: http://api.sanfengyun.com/www/login.php")
+        .context(
+            "https://api.sanfengyun.com/www/login.php 全部尝试失败（10 次）: \
+             https://api.sanfengyun.com/www/login.php 请求失败: error sending request for url",
+        )
+        .context("登录请求失败");
+        assert!(
+            is_transient_network_error(&e),
+            "连接超时必须判为 transient（否则每次厂商抖动都会推假警报）"
+        );
+    }
+
+    #[test]
+    fn deterministic_http_reject_wins_over_network_words() {
+        // 错误链里同时有网络症状与确定性拒绝时，**以确定性拒绝为准**：
+        // 请求本身不对，等一等不会变好，该人看。
+        let e = anyhow::anyhow!("HTTP 422: https://api.sanfengyun.com/www/renwu.php")
+            .context("请求失败: operation timed out");
+        assert!(
+            !is_transient_network_error(&e),
+            "确定性 HTTP 拒绝不得判成 transient"
+        );
+    }
+
+    #[test]
+    fn credential_failure_still_needs_human() {
+        // 登录页返回了内容但明确说登录失败 —— 这是凭据/WAF 问题，必须仍报"需要人工介入"。
+        let e = anyhow::anyhow!("登录失败: <html>用户名或密码错误</html>");
+        assert!(
+            !is_transient_network_error(&e),
+            "凭据错误绝不能被当成网络抖动而静默"
+        );
+    }
+
+    #[test]
+    fn article_quality_failure_is_not_transient() {
+        // 内容不合规跟网络无关，重试也没用，必须仍报"需要人工介入"。
+        let e = anyhow::anyhow!("生成文章 3 次仍不合规，放弃本次（宁缺毋滥，不做垃圾提交）");
+        assert!(!is_transient_network_error(&e));
+    }
+
+    #[test]
+    fn other_network_symptoms_are_transient() {
+        for s in [
+            "dns error: failed to lookup address information",
+            "connection refused",
+            "connection reset by peer",
+            "unexpected eof while reading response",
+            "TLS handshake failure",
+            "读取响应体失败: connection closed before message completed",
+        ] {
+            let e = anyhow::anyhow!("{s}");
+            assert!(is_transient_network_error(&e), "应判为 transient: {s}");
+        }
+    }
 
     fn cfg_both() -> AppConfig {
         AppConfig {
