@@ -26,6 +26,7 @@ jobs:
       # 而 GitHub Actions 默认在某步骤失败后**跳过后续步骤**——上一版就因此让
       # 这个 dev.to 检查显示 "-" 被跳过、完全没跑到。放最前面才保证它一定执行。
       - name: dev.to API key check (READ-ONLY, creates no draft)
+        if: always()
         env:
           DEVTO_API_KEY: ${{ secrets.DEVTO_API_KEY }}
         run: |
@@ -57,13 +58,16 @@ jobs:
       # 17 次定时续期里 7 次挂在 api.sanfengyun.com 连接超时，而当时本步无判据、
       # 照样报 success）。
       - name: vendor API reachability (sanfengyun IP-ban check)
+        if: always()
         run: |
           source .github/scripts/probe-lib.sh
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
           for u in "https://api.sanfengyun.com/www/login.php" \
                    "http://api.sanfengyun.com/www/login.php" \
                    "https://api.abeiyun.com/www/login.php"; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" -m 20 -A "$UA" "$u" || echo "000")
+            # ⚠️ 不要写 `|| echo "000"`：curl 失败时自己已经用 -w 输出了 000，
+            # 再补一个会拼成 "000000"，判据就不认了（第一版正是这么假通过的）。
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 20 -A "$UA" "$u" 2>/dev/null) || true
             classify_reachable "$code" "$u" || exit 1
           done
           echo "✅ 三台厂商端点均可达（注：续期走的是同一批域名，000 才是真故障）"
@@ -72,33 +76,37 @@ jobs:
       # WAF 521 JS 挑战，所以"被挡住"才是预期结果。判据不是"必须 200"，而是"必须能被
       # 明确归类"——无法归类（000/空体/未知码）说明探针自身失效，必须失败。
       - name: csdn plain-HTTP probe（负向对照：预期被 WAF 挡）
+        if: always()
         run: |
           source .github/scripts/probe-lib.sh
           if [ -z "$CSDN_ARTICLE" ]; then echo "::notice::跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
           code=$(curl -s -o /tmp/a.html -w "%{http_code}" -m 20 \
             -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-            "$CSDN_ARTICLE" || echo "000")
+            "$CSDN_ARTICLE" 2>/dev/null) || true
           head -c 200 /tmp/a.html; echo ""
           classify_csdn "$code" /tmp/a.html "csdn plain-HTTP" || exit 1
 
       - name: csdn WAP-share URL probe（负向对照：curl + chrome 三路各自归类）
+        if: always()
         run: |
           source .github/scripts/probe-lib.sh
           if [ -z "$CSDN_ARTICLE" ]; then echo "::notice::跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
           WAP="${CSDN_ARTICLE}?utm_source=blog_wap_share"
           MOBILE_UA="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
           fail=0
-          code=$(curl -s -o /tmp/w1.html -w "%{http_code}" -m 20 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "$WAP" || echo "000")
+          code=$(curl -s -o /tmp/w1.html -w "%{http_code}" -m 20 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "$WAP" 2>/dev/null) || true
           classify_csdn "$code" /tmp/w1.html "WAP + curl desktop UA" || fail=1
-          code=$(curl -s -o /tmp/w2.html -w "%{http_code}" -m 20 -A "$MOBILE_UA" "$WAP" || echo "000")
+          code=$(curl -s -o /tmp/w2.html -w "%{http_code}" -m 20 -A "$MOBILE_UA" "$WAP" 2>/dev/null) || true
           classify_csdn "$code" /tmp/w2.html "WAP + curl mobile UA" || fail=1
           google-chrome --headless=new --no-sandbox --disable-gpu --dump-dom --virtual-time-budget=10000 \
             --window-size=390,844 "$WAP" > /tmp/w3.html 2>/dev/null || true
-          # chrome --dump-dom 拿不到 HTTP 码，用 "200" 占位并让 classify 靠内容特征归类
+          # chrome --dump-dom 拿不到 HTTP 码，传 "200" 占位；classify 靠**内容特征**
+          # 归类（371 字节的 "403 Forbidden" 错误页也在"被挡"特征集里）
           classify_csdn "200" /tmp/w3.html "WAP + headless chrome" || fail=1
           [ "$fail" = "0" ] || exit 1
 
       - name: headless chrome probe — default headless（负向对照）
+        if: always()
         run: |
           source .github/scripts/probe-lib.sh
           if [ -z "$CSDN_ARTICLE" ]; then echo "::notice::跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
@@ -107,6 +115,7 @@ jobs:
           classify_csdn "200" /tmp/dom1.html "chrome --headless" || exit 1
 
       - name: headless chrome probe — new headless mode（负向对照）
+        if: always()
         run: |
           source .github/scripts/probe-lib.sh
           if [ -z "$CSDN_ARTICLE" ]; then echo "::notice::跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
@@ -118,13 +127,14 @@ jobs:
       # 只是站点拒绝）；只有 000 才失败。原版把状态码打印出来却无任何判据，
       # 网络整体不通时照样报 success。
       - name: candidate platforms reachability from Azure runner
+        if: always()
         run: |
           source .github/scripts/probe-lib.sh
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
           fail=0
           probe() { # $1=label $2=url
             local code
-            code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 -A "$UA" "$2" || echo "000")
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 -A "$UA" "$2" 2>/dev/null) || true
             classify_reachable "$code" "$1" || fail=1
           }
           probe "V2EX www"        "https://www.v2ex.com/"
