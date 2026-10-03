@@ -24,6 +24,11 @@ jobs:
       # 兼容性日期决定 Worker 的运行时语义，被悄悄改掉属于最难查的那类故障。
       # 查询参数 `?compatibility_date=...` 同样无效（实测也是 200 但没生效）。
       # 只有 multipart 的 metadata 部件才认，故改为 -F 上传。
+      #
+      # 同日 `ops/sf-monitor.js` 已迁到 ES Module 格式，故 metadata 用 `main_module`
+      # （不再是 service-worker 的 `body_part`），模块部件的 Content-Type 是
+      # `application/javascript+module`（多一个 `+module` 后缀；漏了会被当作
+      # service-worker 解析而报语法错）。迁 ESM 的原因见脚本文件头。
       - name: upload sf-monitor script to Cloudflare
         env:
           CF_API_TOKEN: ${{ secrets.CF_DEPLOY_TOKEN }}
@@ -35,12 +40,12 @@ jobs:
             echo "::error name=cf account missing::Secret CF_ACCOUNT_ID 未配置——无法上传 Worker"
             exit 1
           fi
-          META=$(printf '{"body_part":"script","compatibility_date":"%s"}' "$SF_COMPAT_DATE")
+          META=$(printf '{"main_module":"sf-monitor.js","compatibility_date":"%s"}' "$SF_COMPAT_DATE")
           code=$(curl -sS -o /tmp/resp.json -w "%{http_code}" -X PUT \
             "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/sf-monitor" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -F "metadata=$META;type=application/json" \
-            -F "script=@ops/sf-monitor.js;type=application/javascript")
+            -F "sf-monitor.js=@ops/sf-monitor.js;type=application/javascript+module")
           echo "HTTP $code"
           head -c 1500 /tmp/resp.json
           echo ""
