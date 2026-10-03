@@ -1,4 +1,4 @@
-// 三丰云 博客+龙虾 外部监控 (CF Worker classic, 从 CF 边缘探测 → PushPlus 直推微信)
+// 三丰云 博客+龙虾 外部监控 (CF Worker, ES Module 格式；从 CF 边缘探测 → PushPlus 直推微信)
 // 探测: 博客(200) / 龙虾链路(401门=活) / 龙虾服务(Basic 深探, 非5xx=活)
 // 告警: 状态翻转 + 30 分钟限频; GET /run 只检查, /run?push=1 推测试消息
 // Source: https://developers.cloudflare.com/workers/configuration/cron-triggers/
@@ -7,6 +7,20 @@
 // 会直接暴露你的资产拓扑。三者从 Worker 的加密 secret 读取（由 deploy-worker.yml
 // 从 GitHub Secrets 自动推送）：SF_BLOG_URL / SF_GATEWAY_URL / SF_WECHAT_TARGET。
 // 未配置时该目标被跳过并计入 rows（带 MISSING 标记），监控仍然工作、只是少一路。
+//
+// ── 2026-10-03 从 service-worker 语法迁到 ES Module ──────────────────────────
+// 为什么必须迁：cf CLI（beta）等现代工具链走 Workers Versions API，该端点**只接受
+// ES Module**，service-worker 语法上传会被拒（[10216]）；service-worker 只剩 legacy
+// 裸体 PUT 一条遗留路径，而那条路径每次上传都会静默清空 compatibility_date。
+//
+// 迁移时顺带修正了两处**行为**问题（不是单纯换语法）：
+//  1. secret 一律从 handler 的 `env` 取，不再读 `globalThis`。模块格式下绑定是经
+//     `env` 传入的；靠 globalThis 取是 service-worker 格式的历史便利，不可依赖。
+//  2. scheduled 用 `ctx.waitUntil()` 包住。原写法
+//     `self.addEventListener("scheduled", e => { monitor(globalThis, false) })`
+//     只调用、不等待——异步的探测与推送可能在跑完之前就被运行时回收，表现就是
+//     "监控看着在跑，却什么都发不出去"。
+// ───────────────────────────────────────────────────────────────────────────
 const T = [
   { k: "博客", envKey: "SF_BLOG_URL", ok: [200] },
   { k: "龙虾链路", envKey: "SF_GATEWAY_URL", ok: [200, 401, 403, 302] }
@@ -109,21 +123,21 @@ async function monitor(env, force) {
   return { rows, failed, pushed, at: new Date().toISOString() }
 }
 
-self.addEventListener("fetch", event => {
-  event.respondWith((async req => {
+export default {
+  async fetch(request, env, ctx) {
     // 公网入口鉴权: 所有 HTTP 路径要求 Authorization: Bearer <AUTH_TOKEN> (cron 定时不受此限)
-    const at = req.headers.get("Authorization") || ""
-    const required = globalThis.AUTH_TOKEN || ""
+    const at = request.headers.get("Authorization") || ""
+    const required = env.AUTH_TOKEN || ""
     // AUTH_TOKEN **未绑定时必须拒绝，而不是放行**。
     // 旧写法 `at !== "Bearer " + (AUTH_TOKEN || "")` 在未配置时等价于
     // 只要请求头写成 `Bearer `（空值）就能通过——即 /run、/t2 对公网零门槛，
     // 任何人可白嫖 PushPlus 配额并触发网关 POST。未配置 = 拒绝（fail closed）。
     if (!required) return new Response("server not configured (AUTH_TOKEN unset)", { status: 503 })
     if (at !== "Bearer " + required) return new Response("unauthorized", { status: 401 })
-    const u = new URL(req.url)
+    const u = new URL(request.url)
     if (u.pathname === "/") return new Response("sf-monitor alive (GET /run to check)")
     if (u.pathname === "/t2") {
-      const blogUrl = (globalThis.SF_BLOG_URL || "").trim()
+      const blogUrl = (env.SF_BLOG_URL || "").trim()
       if (!blogUrl) return new Response("blog fetch: SF_BLOG_URL secret 未配置", { status: 503 })
       try {
         const r = await fetch(blogUrl, { redirect: "follow" })
@@ -134,16 +148,18 @@ self.addEventListener("fetch", event => {
     }
     if (u.pathname === "/run") {
       try {
-        const out = await monitor(globalThis, u.searchParams.has("push"))
+        const out = await monitor(env, u.searchParams.has("push"))
         return new Response(JSON.stringify(out), { headers: { "content-type": "application/json" } })
       } catch (e) {
         return new Response("MON-ERR: " + (e && e.stack || String(e)).slice(0, 500))
       }
     }
     return new Response("not found", { status: 404 })
-  })(event.request))
-})
+  },
 
-self.addEventListener("scheduled", event => {
-  monitor(globalThis, false)
-})
+  async scheduled(event, env, ctx) {
+    // 必须 waitUntil：不包的话定时任务会在探测/推送跑完之前被回收
+    // （原 service-worker 写法就是只调用不等待，见文件头注释第 2 条）
+    ctx.waitUntil(monitor(env, false))
+  }
+}
