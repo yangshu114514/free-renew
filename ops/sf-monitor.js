@@ -1,29 +1,30 @@
-// 三丰云 博客+龙虾 外部监控 (CF Worker, ES Module 格式；从 CF 边缘探测 → PushPlus 直推微信)
-// 探测: 博客(200) / 龙虾链路(401门=活) / 龙虾服务(Basic 深探, 非5xx=活)
+// 三丰云博客 外部监控 (CF Worker, ES Module；从 CF 边缘探测 → PushPlus 直推微信)
+// 探测: 博客站点 HTTP 200
 // 告警: 状态翻转 + 30 分钟限频; GET /run 只检查, /run?push=1 推测试消息
-// Source: https://developers.cloudflare.com/workers/configuration/cron-triggers/
 //
-// ⚠️ 监控目标与微信绑定 ID **不在本文件里**：这是公开仓库，具体域名/个人标识符
-// 会直接暴露你的资产拓扑。三者从 Worker 的加密 secret 读取（由 deploy-worker.yml
-// 从 GitHub Secrets 自动推送）：SF_BLOG_URL / SF_GATEWAY_URL / SF_WECHAT_TARGET。
-// 未配置时该目标被跳过并计入 rows（带 MISSING 标记），监控仍然工作、只是少一路。
+// ── 2026-10-03 移除"龙虾（OpenClaw）"两路探测：本次误报的根治 ─────────────────
 //
-// ── 2026-10-03 从 service-worker 语法迁到 ES Module ──────────────────────────
-// 为什么必须迁：cf CLI（beta）等现代工具链走 Workers Versions API，该端点**只接受
-// ES Module**，service-worker 语法上传会被拒（[10216]）；service-worker 只剩 legacy
-// 裸体 PUT 一条遗留路径，而那条路径每次上传都会静默清空 compatibility_date。
+// 为什么必须移除：OpenClaw 的公网入口 shuyang.cc.cd 已被 owner 主动关停
+// （2026-10-03 实测从公网 HTTP 000，完全不可达）。而本 Worker 跑在 Cloudflare
+// **边缘**，物理上只能走公网——它没有任何办法通过服务器回环 127.0.0.1:18789
+// 去看网关。于是每一轮都把"龙虾链路/龙虾服务"判死并推微信，成为一条**永远为真
+// 的误报**（狼来了），把真正需要人看的告警淹没掉。
 //
-// 迁移时顺带修正了两处**行为**问题（不是单纯换语法）：
-//  1. secret 一律从 handler 的 `env` 取，不再读 `globalThis`。模块格式下绑定是经
-//     `env` 传入的；靠 globalThis 取是 service-worker 格式的历史便利，不可依赖。
-//  2. scheduled 用 `ctx.waitUntil()` 包住。原写法
-//     `self.addEventListener("scheduled", e => { monitor(globalThis, false) })`
-//     只调用、不等待——异步的探测与推送可能在跑完之前就被运行时回收，表现就是
-//     "监控看着在跑，却什么都发不出去"。
+// 网关活性改由**服务器侧**看门狗负责（只有从 loopback 探测才看得到真相）：
+//   · gw-watchdog.timer          每 30s 看 gateway 进程 RSS
+//   · health-check.timer         每日 03:00 跑 agent 全面体检
+//   · sanfengyun-watchdog.timer  每 10min 自愈（容器 / halo / 网络 / data-root）
+// 边缘这层只回答"从外部看博客是否可达"——这才是边缘视角**能**回答的问题。
+//
+// 另修一处会制造永久误报的缺陷：旧代码把"secret 未配置"的跳过项也算进 failed，
+// 于是漏配一个 secret 就等于每 10 分钟一次永久告警。现在 skipped 不计故障，
+// 但**全部目标都被跳过**会单独告警（那代表监控实际处于失明状态，必须让人知道）。
+//
+// ⚠️ 监控目标不在本文件里（公开仓库）：从 Worker 加密 secret 读取（由
+// deploy-worker.yml 从 GitHub Secrets 推送）：SF_BLOG_URL。
 // ───────────────────────────────────────────────────────────────────────────
 const T = [
-  { k: "博客", envKey: "SF_BLOG_URL", ok: [200] },
-  { k: "龙虾链路", envKey: "SF_GATEWAY_URL", ok: [200, 401, 403, 302] }
+  { k: "博客", envKey: "SF_BLOG_URL", ok: [200, 301, 302] }
 ]
 
 // 解析真实 URL：secret 未配置 → 返回 null（该探测项跳过，而不是拿空串去 fetch）
@@ -46,45 +47,38 @@ async function probe(t, env) {
   return { k: t.k, code, err, ok: t.ok.includes(code) }
 }
 
-async function probeSvc(env) {
-  const gwUrl = (env.SF_GATEWAY_URL || "").trim()
-  if (!gwUrl) return { k: "龙虾服务(MISSING SF_GATEWAY_URL)", code: 0, err: "secret 未配置", ok: false }
-  let code = 0, err = ""
-  const ctl = new AbortController()
-  const timer = setTimeout(() => ctl.abort(), 60000)
-  try {
-    const auth = "Basic " + btoa((env.OC_USER || "") + ":" + (env.OC_PASS || ""))
-    const r = await fetch(gwUrl.replace(/\/$/, "") + "/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": auth },
-      body: JSON.stringify({ model: "openclaw", messages: [{ role: "user", content: "ping" }], max_tokens: 1 }),
-      redirect: "follow", signal: ctl.signal
-    })
-    code = r.status
-  } catch (e) { err = String(e).slice(0, 60) }
-  finally { clearTimeout(timer) }
-  // 5xx/524(CF网关超时)/0 = 挂; 2xx/4xx = 活着(4xx = 认证层正常拒绝)
-  return { k: "龙虾服务", code, err, ok: code > 0 && code < 500 }
-}
-
 async function monitor(env, force) {
   const rows = []
   for (const t of T) rows.push(await probe(t, env))
-  if (env.OC_PASS) rows.push(await probeSvc(env))
 
-  const failed = rows.filter(r => !r.ok).map(r => r.k + "(" + (r.code || "000") + (r.err ? "," + r.err : ""))
+  // skipped（secret 未配置）**不算故障**——那是"没监控这个目标"，不是"目标挂了"。
+  // 旧写法 rows.filter(r => !r.ok) 会把 MISSING 也判成故障，漏配即永久告警。
+  const active = rows.filter(r => !r.skipped)
+  const failed = active.filter(r => !r.ok).map(r => r.k + "(" + (r.code || "000") + (r.err ? "," + r.err : ""))
+  // 全部目标都被跳过 = 监控实际失明：这必须报，否则"配置丢了"和"一切正常"长得一样
+  const noTargets = active.length === 0
+  const bad = failed.length > 0 || noTargets
+
   const cache = await caches.open("sfmon")
   const KEY = "https://sfmon-cache.internal/state"
   const prevRes = await cache.match(KEY)
   const prev = prevRes ? await prevRes.json() : {}
   const now = Date.now()
 
+  const detail = "<pre>" + JSON.stringify(rows, null, 1) + "</pre>"
+  const bjTime = "<br>北京时间 " + new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }) + "</pre>"
   let pushList = []
-  if (force) pushList.push({ title: "监控自检(手动): " + (failed.length ? "有异常 " + failed.join(",") : "全绿"), body: "<pre>" + JSON.stringify(rows, null, 1) + "</pre>" })
-  if (failed.length && prev.state !== "down")
-    pushList.push({ title: "❌ 三丰云监控掉线: " + failed.join(", "), body: "<pre>" + JSON.stringify(rows, null, 1) + "<br>北京时间 " + new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }) + "</pre>" })
-  if (!failed.length && prev.state === "down")
-    pushList.push({ title: "✅ 三丰云监控已恢复: 全绿", body: "<pre>" + JSON.stringify(rows, null, 1) + "</pre>" })
+  if (force) pushList.push({
+    title: "监控自检(手动): " + (bad ? (noTargets ? "无有效目标" : "有异常 " + failed.join(",")) : "全绿"),
+    body: detail
+  })
+  if (bad && prev.state !== "down")
+    pushList.push({
+      title: noTargets ? "⚠️ 三丰云监控失明: 无有效目标（SF_BLOG_URL 未配置）" : "❌ 三丰云博客掉线: " + failed.join(", "),
+      body: detail.replace(/<\/pre>$/, "") + bjTime
+    })
+  if (!bad && prev.state === "down")
+    pushList.push({ title: "✅ 三丰云监控已恢复: 全绿", body: detail })
 
   const sinceLast = now - (prev.lastPush || 0)
   let pushed = 0
@@ -101,26 +95,9 @@ async function monitor(env, force) {
       ppOk = (j.code === 200 || j.code === 0)
       pushed += ppOk ? 1 : 0
     } catch (e) { pushed = -1 }
-    // 双通道②: openclaw 龙虾代告 (仅龙虾服务层可达时; 挂掉则自然只剩 PushPlus)
-    // 网关地址与微信绑定 ID 同样来自 Worker secret，不写进本文件。
-    const gwUrl = (env.SF_GATEWAY_URL || "").trim()
-    const wxTarget = (env.SF_WECHAT_TARGET || "").trim()
-    if (env.OC_PASS && gwUrl && wxTarget && rows.find(r2 => r2.k === "龙虾服务" && r2.ok)) {
-      try {
-        const auth = "Basic " + btoa((env.OC_USER || "") + ":" + env.OC_PASS)
-        const msg = "监控告警转发: 用 message 工具 send 到微信 " + wxTarget + ", 正文: " + m.title + "\n" + m.body.replace(/<pre>/g, "").replace(/<\/pre>/g, "") + " (PushPlus 已同步推送)。成功只回:已发送。"
-        await fetch(gwUrl.replace(/\/$/, "") + "/v1/chat/completions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": auth },
-          body: JSON.stringify({ model: "openclaw", messages: [{ role: "user", content: msg }], max_tokens: 200, stream: false })
-        })
-      } catch (e2) { /* 网关不可达 = 静默, PushPlus 已是主通道 */ }
-    } else if (env.OC_PASS && gwUrl && !rows.find(r2 => r2.k === "龙虾服务" && r2.ok)) {
-      /* 服务层本就挂了：不再试图转发，PushPlus 是唯一通道 */
-    }
-    if (!force) await cache.put(KEY, new Response(JSON.stringify({ state: failed.length ? "down" : "up", lastPush: now })))
+    if (!force) await cache.put(KEY, new Response(JSON.stringify({ state: bad ? "down" : "up", lastPush: now })))
   }
-  return { rows, failed, pushed, at: new Date().toISOString() }
+  return { rows, failed, noTargets, pushed, at: new Date().toISOString() }
 }
 
 export default {
@@ -131,7 +108,7 @@ export default {
     // AUTH_TOKEN **未绑定时必须拒绝，而不是放行**。
     // 旧写法 `at !== "Bearer " + (AUTH_TOKEN || "")` 在未配置时等价于
     // 只要请求头写成 `Bearer `（空值）就能通过——即 /run、/t2 对公网零门槛，
-    // 任何人可白嫖 PushPlus 配额并触发网关 POST。未配置 = 拒绝（fail closed）。
+    // 任何人可白嫖 PushPlus 配额。未配置 = 拒绝（fail closed）。
     if (!required) return new Response("server not configured (AUTH_TOKEN unset)", { status: 503 })
     if (at !== "Bearer " + required) return new Response("unauthorized", { status: 401 })
     const u = new URL(request.url)

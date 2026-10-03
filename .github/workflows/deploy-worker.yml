@@ -94,7 +94,12 @@ jobs:
             [ "$code" = "200" ] || { head -c 600 /tmp/sec.json; echo ""; exit 1; }
           }
           # ⚠️ CF Worker 的 secret 绑定名必须与脚本里 env.XXX 的名字**完全一致**
-          push_secret "SF_BLOG_URL" "$SF_BLOG_URL"
-          push_secret "SF_GATEWAY_URL" "$SF_GATEWAY_URL"
-          push_secret "SF_WECHAT_TARGET" "$SF_WECHAT_TARGET"
-          push_secret "OC_USER" "$SF_OC_USER"
+          #
+          # 2026-10-03：脚本已移除"龙虾（OpenClaw）"两路探测，因此下面三个 secret
+          # 目前**代码里已不再引用**。保留推送是刻意的——它们仍加密存放在 Worker 上，
+          # 将来若重新开放 OpenClaw 的公网入口，把探测加回脚本即可，无需再找回这些值。
+          # 别因为"看起来没用"就把它们删掉。
+          push_secret "SF_BLOG_URL" "$SF_BLOG_URL"                 # ← 唯一在用的目标
+          push_secret "SF_GATEWAY_URL" "$SF_GATEWAY_URL"           # 暂未使用（见上）
+          push_secret "SF_WECHAT_TARGET" "$SF_WECHAT_TARGET"       # 暂未使用（见上）
+          push_secret "OC_USER" "$SF_OC_USER"                      # 暂未使用（见上）
