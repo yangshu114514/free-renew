@@ -17,6 +17,11 @@ jobs:
       CSDN_ARTICLE: ${{ secrets.CSDN_PROBE_ARTICLE }}
       CSDN_ARTICLE_2: ${{ secrets.CSDN_PROBE_ARTICLE_2 }}
     steps:
+      # 需要 checkout 才能 source 判据库（.github/scripts/probe-lib.sh）。
+      # 该库给出每类探针"什么才算符合预期"的判据——没有判据的探针会制造假通过，
+      # 见库文件头的说明。
+      - uses: actions/checkout@v4
+
       # 放在第一位：前面的 CSDN/厂商探针都可能失败（curl SSL、WAF、网络抖动），
       # 而 GitHub Actions 默认在某步骤失败后**跳过后续步骤**——上一版就因此让
       # 这个 dev.to 检查显示 "-" 被跳过、完全没跑到。放最前面才保证它一定执行。
@@ -47,79 +52,89 @@ jobs:
             exit 1
           fi
 
+      # 可达性探针：拿到任何 HTTP 码都算"可达"，只有 000（连不上）才算失败。
+      # 这条正好覆盖"厂商连不上导致整轮续期报废"的故障模式（2026-10-03 实测：
+      # 17 次定时续期里 7 次挂在 api.sanfengyun.com 连接超时，而当时本步无判据、
+      # 照样报 success）。
       - name: vendor API reachability (sanfengyun IP-ban check)
         run: |
-          echo "--- sanfengyun https ---"
-          curl -s -o /dev/null -w "%{http_code} (%{time_total}s)" -m 20 https://api.sanfengyun.com/www/login.php || echo " FAIL"
-          echo ""
-          echo "--- sanfengyun http ---"
-          curl -s -o /dev/null -w "%{http_code} (%{time_total}s)" -m 20 http://api.sanfengyun.com/www/login.php || echo " FAIL"
-          echo ""
-          echo "--- abeiyun https ---"
-          curl -s -o /dev/null -w "%{http_code} (%{time_total}s)" -m 20 https://api.abeiyun.com/www/login.php || echo " FAIL"
-          echo ""
+          source .github/scripts/probe-lib.sh
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          for u in "https://api.sanfengyun.com/www/login.php" \
+                   "http://api.sanfengyun.com/www/login.php" \
+                   "https://api.abeiyun.com/www/login.php"; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 20 -A "$UA" "$u" || echo "000")
+            classify_reachable "$code" "$u" || exit 1
+          done
+          echo "✅ 三台厂商端点均可达（注：续期走的是同一批域名，000 才是真故障）"
 
-      - name: csdn plain-HTTP probe (today's live article)
+      # CSDN 这几步是**负向对照**（negative control）：CSDN 对无 cookie 的裸请求固定下发
+      # WAF 521 JS 挑战，所以"被挡住"才是预期结果。判据不是"必须 200"，而是"必须能被
+      # 明确归类"——无法归类（000/空体/未知码）说明探针自身失效，必须失败。
+      - name: csdn plain-HTTP probe（负向对照：预期被 WAF 挡）
         run: |
-          if [ -z "$CSDN_ARTICLE" ]; then echo "跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
-          curl -s -o /tmp/a.html -w "HTTP:%{http_code} size:%{size_download}" -m 20 \
+          source .github/scripts/probe-lib.sh
+          if [ -z "$CSDN_ARTICLE" ]; then echo "::notice::跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
+          code=$(curl -s -o /tmp/a.html -w "%{http_code}" -m 20 \
             -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-            "$CSDN_ARTICLE"
-          echo ""
-          head -c 200 /tmp/a.html
+            "$CSDN_ARTICLE" || echo "000")
+          head -c 200 /tmp/a.html; echo ""
+          classify_csdn "$code" /tmp/a.html "csdn plain-HTTP" || exit 1
 
-      - name: csdn WAP-share URL probe (curl + chrome)
+      - name: csdn WAP-share URL probe（负向对照：curl + chrome 三路各自归类）
         run: |
-          if [ -z "$CSDN_ARTICLE" ]; then echo "跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
+          source .github/scripts/probe-lib.sh
+          if [ -z "$CSDN_ARTICLE" ]; then echo "::notice::跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
           WAP="${CSDN_ARTICLE}?utm_source=blog_wap_share"
           MOBILE_UA="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-          echo "--- curl desktop UA ---"
-          curl -s -o /tmp/w1.html -w "HTTP:%{http_code} size:%{size_download}" -m 20 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "$WAP"
-          echo ""
-          echo "--- curl mobile UA ---"
-          curl -s -o /tmp/w2.html -w "HTTP:%{http_code} size:%{size_download}" -m 20 -A "$MOBILE_UA" "$WAP"
-          echo ""
-          echo "--- chrome headless=new on wap URL ---"
+          fail=0
+          code=$(curl -s -o /tmp/w1.html -w "%{http_code}" -m 20 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "$WAP" || echo "000")
+          classify_csdn "$code" /tmp/w1.html "WAP + curl desktop UA" || fail=1
+          code=$(curl -s -o /tmp/w2.html -w "%{http_code}" -m 20 -A "$MOBILE_UA" "$WAP" || echo "000")
+          classify_csdn "$code" /tmp/w2.html "WAP + curl mobile UA" || fail=1
           google-chrome --headless=new --no-sandbox --disable-gpu --dump-dom --virtual-time-budget=10000 \
             --window-size=390,844 "$WAP" > /tmp/w3.html 2>/dev/null || true
-          echo "DOM size: $(wc -c < /tmp/w3.html)"
-          grep -o "iw(\|403 Forbidden\|article_title\|article_content\|阿贝" /tmp/w3.html /tmp/w1.html /tmp/w2.html 2>/dev/null | sort | uniq -c || echo "(no markers)"
+          # chrome --dump-dom 拿不到 HTTP 码，用 "200" 占位并让 classify 靠内容特征归类
+          classify_csdn "200" /tmp/w3.html "WAP + headless chrome" || fail=1
+          [ "$fail" = "0" ] || exit 1
 
-      - name: headless chrome probe — default headless
+      - name: headless chrome probe — default headless（负向对照）
         run: |
-          if [ -z "$CSDN_ARTICLE" ]; then echo "跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
+          source .github/scripts/probe-lib.sh
+          if [ -z "$CSDN_ARTICLE" ]; then echo "::notice::跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
           google-chrome --headless --no-sandbox --disable-gpu --dump-dom --virtual-time-budget=10000 \
             "$CSDN_ARTICLE" > /tmp/dom1.html 2>/tmp/e1.log || true
-          echo "DOM size: $(wc -c < /tmp/dom1.html)"
-          grep -o "iw(\|403 Forbidden\|article_title\|WAF" /tmp/dom1.html | sort | uniq -c || echo "(no signature)"
+          classify_csdn "200" /tmp/dom1.html "chrome --headless" || exit 1
 
-      - name: headless chrome probe — new headless mode
+      - name: headless chrome probe — new headless mode（负向对照）
         run: |
-          if [ -z "$CSDN_ARTICLE" ]; then echo "跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
+          source .github/scripts/probe-lib.sh
+          if [ -z "$CSDN_ARTICLE" ]; then echo "::notice::跳过：Secret CSDN_PROBE_ARTICLE 未配置"; exit 0; fi
           google-chrome --headless=new --no-sandbox --disable-gpu --dump-dom --virtual-time-budget=10000 \
             "$CSDN_ARTICLE" > /tmp/dom2.html 2>/tmp/e2.log || true
-          echo "DOM size: $(wc -c < /tmp/dom2.html)"
-          grep -o "iw(\|403 Forbidden\|article_title\|WAF" /tmp/dom2.html | sort | uniq -c || echo "(no signature)"
+          classify_csdn "200" /tmp/dom2.html "chrome --headless=new" || exit 1
 
+      # 可达性探针：每站必须拿到**某个** HTTP 码才算可达（403 也算——那说明网络通、
+      # 只是站点拒绝）；只有 000 才失败。原版把状态码打印出来却无任何判据，
+      # 网络整体不通时照样报 success。
       - name: candidate platforms reachability from Azure runner
         run: |
+          source .github/scripts/probe-lib.sh
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-          echo "--- V2EX (approved list + official API) ---"
-          curl -s -o /dev/null -w "www:%{http_code} " -m 15 -A "$UA" https://www.v2ex.com/
-          curl -s -o /dev/null -w "api:%{http_code}" -m 15 https://www.v2ex.com/api/topics/hot.json
-          echo ""
-          echo "--- 51CTO blog article page ---"
-          curl -s -o /tmp/51.html -w "%{http_code} size:%{size_download}" -m 15 -A "$UA" https://blog.51cto.com/u_16213340/13240688
-          echo ""
-          echo "--- segmentfault article page ---"
-          curl -s -o /tmp/sf.html -w "%{http_code} size:%{size_download}" -m 15 -A "$UA" https://segmentfault.com/a/1190000041516850
-          echo ""
-          echo "--- zhihu article page (baseline, expect 403) ---"
-          curl -s -o /dev/null -w "%{http_code}" -m 15 -A "$UA" https://zhuanlan.zhihu.com/p/2080768725272245516
-          echo ""
-          echo "--- toutiao ---"
-          curl -s -o /dev/null -w "%{http_code}" -m 15 -A "$UA" https://www.toutiao.com/article/7400000000000000000/
-          echo ""
+          fail=0
+          probe() { # $1=label $2=url
+            local code
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 -A "$UA" "$2" || echo "000")
+            classify_reachable "$code" "$1" || fail=1
+          }
+          probe "V2EX www"        "https://www.v2ex.com/"
+          probe "V2EX api"        "https://www.v2ex.com/api/topics/hot.json"
+          probe "51CTO 文章页"     "https://blog.51cto.com/u_16213340/13240688"
+          probe "segmentfault 文章页" "https://segmentfault.com/a/1190000041516850"
+          probe "知乎专栏（基线：预期 403，但可达）" "https://zhuanlan.zhihu.com/p/2080768725272245516"
+          probe "今日头条"         "https://www.toutiao.com/article/7400000000000000000/"
+          [ "$fail" = "0" ] || exit 1
+          echo "✅ 所有候选平台从 Azure runner 均可达（各站 4xx/5xx 属站点策略，不算失败）"
 
   sshot:
     runs-on: ubuntu-latest
