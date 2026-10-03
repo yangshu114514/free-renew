@@ -62,14 +62,19 @@ jobs:
         run: |
           source .github/scripts/probe-lib.sh
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          # ⚠️ 不能写成 `classify_reachable ... || exit 1`：那样第一个端点不可达就退出，
+          # 后面两个根本没测，事后无法判断"是全都不通还是只有某一个不通"。
+          # 逐个都测、最后统一判——诊断类探针要的是完整画面。
+          fail=0
           for u in "https://api.sanfengyun.com/www/login.php" \
                    "http://api.sanfengyun.com/www/login.php" \
                    "https://api.abeiyun.com/www/login.php"; do
             # ⚠️ 不要写 `|| echo "000"`：curl 失败时自己已经用 -w 输出了 000，
             # 再补一个会拼成 "000000"，判据就不认了（第一版正是这么假通过的）。
             code=$(curl -s -o /dev/null -w "%{http_code}" -m 20 -A "$UA" "$u" 2>/dev/null) || true
-            classify_reachable "$code" "$u" || exit 1
+            classify_reachable "$code" "$u" || fail=1
           done
+          [ "$fail" = "0" ] || exit 1
           echo "✅ 三台厂商端点均可达（注：续期走的是同一批域名，000 才是真故障）"
 
       # CSDN 这几步是**负向对照**（negative control）：CSDN 对无 cookie 的裸请求固定下发
