@@ -128,6 +128,17 @@ fn is_transient_network_error(err: &anyhow::Error) -> bool {
     NETWORK.iter().any(|k| chain.contains(k))
 }
 
+/// 提交阶段错误的处置：返回 `(事件状态, 是否 transient)`。
+///
+/// 单独提纯是为了**可直接单测**——stage_submit 的 Err 分支原先绕过
+/// [`is_transient_network_error`]，网络抖一次就误报"提交异常"+ 一轮红 run
+/// （2026-10-03 审计 [1]，五阶段里唯一的漏网处）。真跑一次 submit 需要登录态
+/// 与真实厂商端点，单测够不着；把判定提纯成 `(str, bool)` 就锁得住了。
+fn submit_err_disposition(err: &anyhow::Error) -> (&'static str, bool) {
+    let transient = is_transient_network_error(err);
+    (if transient { "transient" } else { "failed" }, transient)
+}
+
 /// 阶段失败的统一出口：写事件 + 发通知 + 标记结果（网络临时失败 vs 需人工介入）。
 ///
 /// 这段样板在改造前被复制了 5 遍（main 里 5 处 + probe 里 1 处）；想给所有失败
@@ -534,14 +545,32 @@ fn stage_submit(
             AccountOutcome::NeedHuman
         }
         Err(e) => {
+            // ⚠️ 这里必须与 fail() 走同一套 transient 判定——不能因为这是终段就绕过。
+            // submit_renewal 走 post_with 的 5 轮退避，全挂后返回的正是网络错误；
+            // 原先直接 NeedHuman + "提交异常"，网络抖一次就是一条假警报 + 一轮红 run
+            //（2026-10-03 审计 [1]：其余 5 个阶段全走 fail()，唯独这里漏网）。
+            let (status, transient) = submit_err_disposition(&e);
             let detail = format!("{e:#}");
             run.event(
                 &step_name(account, "submit.done"),
-                "failed",
-                json!({"vendor": vendor, "account": account.id, "url": url, "error": detail}),
+                status,
+                json!({"vendor": vendor, "account": account.id, "url": url,
+                       "error": detail, "transient": transient}),
             );
-            notify::send(&cfg.notify, &format!("{} 提交异常", account.label), &detail);
-            AccountOutcome::NeedHuman
+            if transient {
+                notify::send(
+                    &cfg.notify,
+                    &format!("⏳ {} 续期提交未完成（网络原因，无需人工介入）", account.label),
+                    &format!(
+                        "{detail}\n\n这不是故障：文章已发出，只是提交请求没连上厂商。\
+                         下次定时任务会自动重试（续费窗口约 5 天），**无需人工介入**。"
+                    ),
+                );
+                AccountOutcome::Transient
+            } else {
+                notify::send(&cfg.notify, &format!("{} 续期提交异常", account.label), &detail);
+                AccountOutcome::NeedHuman
+            }
         }
     }
 }
@@ -1006,6 +1035,30 @@ mod tests {
             is_transient_network_error(&e),
             "连接超时必须判为 transient（否则每次厂商抖动都会推假警报）"
         );
+    }
+
+    /// stage_submit 的 Err 分支原先绕过 transient 判定（审计 [1]，五阶段唯一漏网）：
+    /// 网络抖一次就误报"提交异常" + 一轮红 run。判定已提纯成 submit_err_disposition，
+    /// 这两条回归用例锁住"网络错误=transient、硬错误=failed"。
+    #[test]
+    fn submit_stage_network_error_routes_to_transient() {
+        let e = anyhow::anyhow!(
+            "error sending request for url (http://api.sanfengyun.com/www/renwu.php): \
+             client error (Connect): operation timed out"
+        )
+        .context("续期提交失败");
+        let (status, transient) = submit_err_disposition(&e);
+        assert!(transient, "提交阶段的网络错误必须判为 transient");
+        assert_eq!(status, "transient");
+    }
+
+    #[test]
+    fn submit_stage_hard_error_routes_to_failed() {
+        // 凭据/内容类错误照旧走 failed —— 绝不能被"网络原因"的说辞静默
+        let e = anyhow::anyhow!("提交被拒: <html>请勿重复提交</html>").context("续期提交失败");
+        let (status, transient) = submit_err_disposition(&e);
+        assert!(!transient, "非网络错误必须仍判 failed");
+        assert_eq!(status, "failed");
     }
 
     #[test]
