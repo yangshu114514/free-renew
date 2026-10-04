@@ -832,19 +832,12 @@ fn loggable_args(args: &[String]) -> Vec<String> {
     out
 }
 
-/// run.config 事件的 notify_backend 字段：按实际投递顺序（openclaw → pushplus →
-/// webhook）列出已配置的后端，全空则是 "none"。与 notify::send 的顺序一致。
+/// run.config 事件的 notify_backend 字段：按实际投递顺序列出**会真正尝试**的后端
+/// （含 NOTIFY_OPENCLAW_ENABLED 开关判定），全空则是 "none"。
+/// 事实源是 [`NotifyConfig::backend_chain`] —— 原先这里与 probe.rs 各写一份，
+/// 且本函数漏看 openclaw 开关，停用后仍报 "openclaw"。
 fn notify_backend_label(notify: &NotifyConfig) -> String {
-    let mut backends: Vec<&str> = Vec::new();
-    if notify.openclaw.is_some() {
-        backends.push("openclaw");
-    }
-    if !notify.pushplus_token.trim().is_empty() {
-        backends.push("pushplus");
-    }
-    if !notify.webhook_url.is_empty() {
-        backends.push("webhook");
-    }
+    let backends = notify.backend_chain();
     if backends.is_empty() {
         "none".to_string()
     } else {

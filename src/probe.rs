@@ -80,10 +80,6 @@ fn target_profile(
 
 fn test_notify(cfg: &AppConfig, run: &RunContext) -> Result<()> {
     let has_pp = !cfg.notify.pushplus_token.trim().is_empty();
-    let openclaw_enabled = std::env::var("NOTIFY_OPENCLAW_ENABLED")
-        .ok()
-        .map(|v| !v.trim().is_empty() && !v.trim().eq_ignore_ascii_case("false"))
-        .unwrap_or(true);
     if cfg.notify.openclaw.is_none() && !has_pp && cfg.notify.webhook_url.is_empty() {
         run.event(
             "test_notify",
@@ -95,17 +91,15 @@ fn test_notify(cfg: &AppConfig, run: &RunContext) -> Result<()> {
              或 config.toml 的 [notify.openclaw] / [notify].pushplus_token / [notify].webhook_url"
         );
     }
-    // 后端标签按 send() 的实际投递顺序拼（主 + 兜底），链路与之一致
-    let mut backends: Vec<String> = Vec::new();
-    if cfg.notify.openclaw.is_some() && openclaw_enabled {
-        backends.push("openclaw（网关 agent → 微信）".into());
-    }
-    if has_pp {
-        backends.push("pushplus（公网 API → 微信）".into());
-    }
-    if !cfg.notify.webhook_url.is_empty() {
-        backends.push("webhook".into());
-    }
+    // 后端清单与 notify::send 同源（backend_chain 含 NOTIFY_OPENCLAW_ENABLED 判定），
+    // 展示文案（中文说明）由这里包装——事实源只有一份，文案各用各的
+    let chain = cfg.notify.backend_chain();
+    let pretty = |k: &str| match k {
+        "openclaw" => "openclaw（网关 agent → 微信）",
+        "pushplus" => "pushplus（公网 API → 微信）",
+        _ => "webhook",
+    };
+    let backends: Vec<String> = chain.iter().map(|k| pretty(k).to_string()).collect();
     let backend_label = backends.join(" → ");
     let detail = format!(
         "通知后端: {backend_label}\n本轮为人工触发测试，非真实续期。你看到这条消息说明: 本工具 → {backend_label} 至少一条链路全通（按序首个送达即停）。"
@@ -114,9 +108,7 @@ fn test_notify(cfg: &AppConfig, run: &RunContext) -> Result<()> {
     run.event(
         "test_notify",
         "ok",
-        json!({ "backend": if cfg.notify.openclaw.is_some() && openclaw_enabled { "openclaw" }
-                else if has_pp { "pushplus" }
-                else { "webhook" } }),
+        json!({ "backend": chain.first().copied().unwrap_or("none") }),
     );
     println!(
         "通知已投递（fire-and-forget），到你的 {} 查收。",

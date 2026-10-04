@@ -59,15 +59,14 @@ pub fn send(cfg: &NotifyConfig, title: &str, detail: &str) {
     );
 
     let mut delivered = false;
-    // openclaw 后端可被 NOTIFY_OPENCLAW_ENABLED=false 停用（Secrets 控制，默认开）：
+    // openclaw 后端可被 NOTIFY_OPENCLAW_ENABLED 停用（Secrets 控制，默认开）：
     // 网关链路长期 403 时停用，避免每次告警都白白消耗一次 pushplus 兜底名额。
-    let openclaw_enabled = std::env::var("NOTIFY_OPENCLAW_ENABLED")
-        .ok()
-        .map(|v| !v.trim().is_empty() && !v.trim().eq_ignore_ascii_case("false"))
-        .unwrap_or(true);
+    // 开关语义统一走 config::openclaw_notify_enabled()（0/false/no/off 都算关）——
+    // 原先这里手写一份只认 "false" 的判定，=0 时后端仍会开，与项目其它布尔 env 冲突。
+    let openclaw_enabled = crate::config::openclaw_notify_enabled();
     if let Some(oc) = &cfg.openclaw {
         if !openclaw_enabled {
-            tracing::warn!("[notify] openclaw 后端已停用（NOTIFY_OPENCLAW_ENABLED=false），直接走 pushplus 兜底");
+            tracing::warn!("[notify] openclaw 后端已停用（NOTIFY_OPENCLAW_ENABLED），直接走 pushplus 兜底");
         } else {
             delivered = send_openclaw(oc, title, detail);
         }
