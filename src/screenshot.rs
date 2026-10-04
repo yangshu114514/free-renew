@@ -39,10 +39,21 @@ struct WaitBudget {
 
 impl WaitBudget {
     fn from_env() -> Self {
-        let visible_secs = std::env::var("ARTICLE_VISIBLE_TIMEOUT")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(DEFAULT_VISIBLE_SECS);
+        // 出声纪律与 config::env_u64 同款：`ARTICLE_VISIBLE_TIMEOUT=720s` 这种手滑
+        // 若静默回落默认值，用户会以为配置已经生效（而该值恰好走 env，是 BOM/空白高发通道）
+        let visible_secs = match std::env::var("ARTICLE_VISIBLE_TIMEOUT") {
+            Err(_) => DEFAULT_VISIBLE_SECS,
+            Ok(v) => match v.trim().parse::<u64>() {
+                Ok(n) => n,
+                Err(_) => {
+                    tracing::warn!(
+                        "[screenshot] ARTICLE_VISIBLE_TIMEOUT={v:?} 不是合法非负整数，\
+                         回落到默认值 {DEFAULT_VISIBLE_SECS}"
+                    );
+                    DEFAULT_VISIBLE_SECS
+                }
+            },
+        };
         Self {
             visible_secs,
             poll_secs: DEFAULT_POLL_SECS,

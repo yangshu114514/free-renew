@@ -120,6 +120,9 @@ pub const ENV_KEYS: &[&str] = &[
     "NOTIFY_OPENCLAW_USER",
     "NOTIFY_OPENCLAW_PASSWORD",
     "NOTIFY_OPENCLAW_MODEL",
+    // openclaw 后端开关（0/false/no/off 关，默认开）。此前不在此清单里，
+    // 在 Actions 配了 Secret 也透传不到且无报错（2026-10-03 审计发现 [4]）
+    "NOTIFY_OPENCLAW_ENABLED",
     // 微信绑定目标（openclaw message 工具的 target）。值不进源码，只进加密 Secret
     "NOTIFY_WECHAT_TARGET",
     "NOTIFY_PUSHPLUS_TOKEN",
@@ -337,6 +340,30 @@ pub struct NotifyConfig {
     pub pushplus_token: String,
 }
 
+impl NotifyConfig {
+    /// 按实际投递顺序列出**会真正尝试**的后端（openclaw → pushplus → webhook）。
+    ///
+    /// 这是"链路里有哪些后端"的唯一事实源。原先有两份同义实现且已漂移：
+    /// run.config 事件的 notify_backend 字段**不看** NOTIFY_OPENCLAW_ENABLED
+    /// （openclaw 被停用时仍报 "openclaw"，注释还声称"与 notify::send 的顺序一致"），
+    /// probe 的 test_notify 则看了。收进来后两边同源。
+    ///
+    /// 返回 `&'static str` 键（openclaw/pushplus/webhook），展示文案由调用方包装。
+    pub fn backend_chain(&self) -> Vec<&'static str> {
+        let mut backends: Vec<&'static str> = Vec::new();
+        if self.openclaw.is_some() && crate::config::openclaw_notify_enabled() {
+            backends.push("openclaw");
+        }
+        if !self.pushplus_token.trim().is_empty() {
+            backends.push("pushplus");
+        }
+        if !self.webhook_url.is_empty() {
+            backends.push("webhook");
+        }
+        backends
+    }
+}
+
 /// 手写 Debug：token 会随 `{cfg:?}` 进 JSONL 日志工件（与 CloudAccount 同一个坑），必须遮掉。
 impl std::fmt::Debug for NotifyConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -544,6 +571,25 @@ fn parse_bool(v: &str) -> bool {
         v.trim().to_ascii_lowercase().as_str(),
         "0" | "false" | "no" | "off"
     )
+}
+
+/// openclaw 通知后端的开关对应的**环境变量名**。
+pub const OPENCLAW_ENABLED_ENV: &str = "NOTIFY_OPENCLAW_ENABLED";
+
+/// openclaw 通知后端是否启用（读 [`OPENCLAW_ENABLED_ENV`]）。
+///
+/// 语义统一走 [`parse_bool`]：`0/false/no/off`（大小写不敏感）都算关。
+/// 未设置 → 开（默认行为，保持兼容）。
+///
+/// 为什么收进 config 层：这个开关原先在 notify.rs 与 probe.rs **各手写一份**，
+/// 且都只认字面 `"false"` —— 设 `NOTIFY_OPENCLAW_ENABLED=0` 时后端**仍会开**，
+/// 与项目其它布尔 env 的语义冲突；同时该变量不在 [`ENV_KEYS`] 里，
+/// 在 Actions 配了 Secret 也透传不到（且无任何报错）。
+pub fn openclaw_notify_enabled() -> bool {
+    match std::env::var(OPENCLAW_ENABLED_ENV) {
+        Ok(v) => parse_bool(&v),
+        Err(_) => true,
+    }
 }
 
 /// 装配单个厂商的账号列表：文件给顺序与骨架，环境变量按槽位覆盖/补充。
@@ -1004,6 +1050,36 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// openclaw 开关语义：0/false/no/off（大小写不敏感）都算关，未设置=开。
+    /// 这是 2026-10-03 审计 [3] 的回归用例——原先 notify.rs/probe.rs 各手写一份
+    /// 只认 "false" 的判定，NOTIFY_OPENCLAW_ENABLED=0 时后端仍会开。
+    #[test]
+    fn openclaw_enabled_env_semantics() {
+        // 串行改同一个变量：这条测试改的 env 别的测试也在读，须防串扰。
+        // set_var/remove_var 在 2024 版起是 unsafe，但本仓库 toolchain 仍是
+        // "0/false/no/off 用安全 API" 的旧语义，故直接调用。
+        let key = OPENCLAW_ENABLED_ENV;
+        for (raw, want) in [
+            ("0", false),
+            ("false", false),
+            ("FALSE", false),
+            ("no", false),
+            ("Off", false),
+            (" true ", true),
+            ("1", true),
+            ("anything", true),
+        ] {
+            std::env::set_var(key, raw);
+            assert_eq!(
+                openclaw_notify_enabled(),
+                want,
+                "NOTIFY_OPENCLAW_ENABLED={raw:?} 应为 {want}"
+            );
+        }
+        std::env::remove_var(key);
+        assert!(openclaw_notify_enabled(), "未设置应默认开");
+    }
 
     /// 锁定 BOM 剥离行为。这条测试有真实事故背书：2026-10-02 用
     /// `"devto" | gh variable set PLATFORM_PROVIDER`（PowerShell 管道 +
