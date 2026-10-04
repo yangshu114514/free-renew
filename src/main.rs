@@ -379,7 +379,7 @@ fn stage_article(
                 json!({
                     "vendor": vendor, "account": account.id, "title": a.title,
                     "word_count": a.word_count,
-                    "body_preview": a.body_markdown.chars().take(300).collect::<String>(),
+                    "body_preview": crate::http::truncate_chars(&a.body_markdown, 300),
                 }),
             );
             a
@@ -906,9 +906,9 @@ fn main() -> Result<()> {
             "account_count": cfg.accounts.len(),
             "llm_model": cfg.llm.as_ref().map(|l| l.model.clone()),
             "provider": cfg.platform_provider.clone(),
-            "csdn_ready": cfg.csdn.as_ref().map(|c| c.ready()).unwrap_or(false),
-            "zhihu_ready": cfg.zhihu.as_ref().map(|z| z.ready()).unwrap_or(false),
-            "devto_ready": cfg.devto.as_ref().map(|d| d.ready()).unwrap_or(false),
+            "csdn_ready": cfg.platform_ready("csdn"),
+            "zhihu_ready": cfg.platform_ready("zhihu"),
+            "devto_ready": cfg.platform_ready("devto"),
             "notify_backend": notify_backend_label(&cfg.notify),
             // 本次真正传进来的可选项环境变量名（只有名字，没有值）。
             // 排障"我明明配了 X 却没生效"最快的一眼：变量没出现在这里，

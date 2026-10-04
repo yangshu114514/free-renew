@@ -110,6 +110,8 @@ fn main() -> Result<()> {
     for key in ["UserName", "UserToken", "UN", "p_uid"] {
         match cookies.iter().find(|c| c.name == key) {
             Some(c) => println!(
+                // 独立 bin，不依赖库 crate：这里保留内联截断（库里的 truncate_chars
+                // 够不着；为 10 字符的一次性预览引入依赖不划算）
                 "  ✅ {key} = {}…",
                 c.value.chars().take(10).collect::<String>()
             ),

@@ -264,7 +264,7 @@ impl CloudClient {
 
         Ok(SubmitResult {
             ok: body.contains("提交成功"),
-            raw: body.chars().take(200).collect(),
+            raw: crate::http::truncate_chars(&body, 200),
         })
     }
 
@@ -302,10 +302,28 @@ fn field_str(v: &Value, key: &str) -> Option<String> {
     }
 }
 
-/// 三丰云状态判定（2026-09 真账号实测）：
-///   {"msg":{"delay_state":"审核中"},"response":"200"}   // 提交后待审：中文状态字
-///   审核期外预期：delay_enable:"0"/"1"(字符串) + next_time
-fn parse_sanfengyun(enable: Option<&str>, state_raw: &str) -> RenewState {
+/// 续期状态判定表（三丰云 / 阿贝云 **共用**，2026-09 真账号实测）。
+///
+/// 原本两家各写一份 match：三丰云按 `(enable, state_raw)` 元组匹配、阿贝云先 match
+/// enable 再嵌套 match state_raw——逐 arm 穷举比对可证对任意输入结果完全相同
+/// （仅 arm 顺序不同），且两家 JSON 的形状差异（字符串/数字）早在 [`field_str`]
+/// 就被统一吸收。双份实现是 27 行重复，且改判定规则时必须记得同步两处，漂移即事故。
+///
+/// 实测样本（保留供回归核对）：
+///   三丰云  `{"msg":{"delay_state":"审核中"},"response":"200"}`   // 提交后待审：中文状态字
+///   三丰云  审核期外预期：delay_enable:"0"/"1"（字符串）+ next_time
+///   阿贝云  `{"msg":{"delay_enable":0,"next_time":"2026-09-10 23:49:12"},"check":"e","response":"200"}`
+///           // delay_enable 是 JSON 数字；未到续期日时仅此字段 + next_time
+///
+/// 解析优先级（权衡原则：漏续期的代价是服务器回收+数据丢失，远大于一次多余提交
+/// 被拒——被拒只产生一条通知）：
+///   1. `enable=1`      → 续期窗口已开，续（历史状态字不影响）
+///   2. `enable=0`      → 未到期
+///   3. 无 enable 字段时的 "审核通过" → 上轮延期了结、新窗口可能已开。
+///      实测 2026-09-12：控制台显示已到期但 API 仅返回该状态字，视为可续；
+///      若窗口实际未开，多余提交会被厂商拒绝并通知，无害。
+///   4. 其余 → Unknown（保守起见不执行续期，请人工确认）
+fn parse_delay_state(enable: Option<&str>, state_raw: &str) -> RenewState {
     match (enable, state_raw) {
         (Some("1"), _) => RenewState::CanRenew,
         (Some("0"), _) => RenewState::Waiting,
@@ -317,33 +335,10 @@ fn parse_sanfengyun(enable: Option<&str>, state_raw: &str) -> RenewState {
     }
 }
 
-/// 阿贝云状态判定（2026-09 真账号实测）：
-///   {"msg":{"delay_enable":0,"next_time":"2026-09-10 23:49:12"},"check":"e","response":"200"}
-///   // delay_enable 是 JSON 数字；未到续期日时仅此字段 + next_time
-fn parse_abeiyun(enable: Option<&str>, state_raw: &str) -> RenewState {
-    match enable {
-        Some("1") => RenewState::CanRenew,
-        Some("0") => RenewState::Waiting,
-        _ => match state_raw {
-            "1" => RenewState::CanRenew,
-            "0" => RenewState::Waiting,
-            "审核通过" => RenewState::CanRenew,
-            _ => RenewState::Unknown,
-        },
-    }
-}
-
-/// 状态解析——两家厂商形状不同，明确分开，别混为一谈。
+/// 状态解析入口：从厂商响应里剥字段、识别"审核中"、再交 [`parse_delay_state`] 判定。
 ///
-/// 解析优先级。权衡原则：漏续期的代价是服务器回收+数据丢失，
-/// 远大于一次多余提交被拒（被拒只产生一条通知）。
-/// 1. "审核中" → 上一轮提交仍在人工审核，绝不重复提交
-/// 2. delay_enable=1 → 续期窗口已开，续（历史状态字不影响）
-/// 3. delay_enable=0 → 未到期
-/// 4. 无 enable 字段的 "审核通过" → 上轮延期了结、新窗口可能已开。
-///    实测 2026-09-12：控制台显示已到期但 API 仅返回该状态字，
-///    视为可续；若窗口实际未开，多余提交会被厂商拒绝并通知，无害。
-/// 5. 其余 → Unknown，保守跳过
+/// 两家厂商的 JSON 形状差异（字符串/数字）已在 [`field_str`] 统一吸收，
+/// 判定规则本身两家一致（见 [`parse_delay_state`] 的优先级说明），故共用一张表。
 fn parse_state(vendor_key: &str, inner: &Value) -> (RenewState, String) {
     let enable = field_str(inner, "delay_enable");
     let state_raw = field_str(inner, "delay_state").unwrap_or_default();
@@ -354,8 +349,7 @@ fn parse_state(vendor_key: &str, inner: &Value) -> (RenewState, String) {
     }
 
     let state = match vendor_key {
-        "sanfengyun" => parse_sanfengyun(enable.as_deref(), &state_raw),
-        "abeiyun" => parse_abeiyun(enable.as_deref(), &state_raw),
+        "sanfengyun" | "abeiyun" => parse_delay_state(enable.as_deref(), &state_raw),
         _ => RenewState::Unknown,
     };
 

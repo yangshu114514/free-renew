@@ -179,7 +179,7 @@ fn send_openclaw(oc: &OpenClawNotify, title: &str, detail: &str) -> bool {
                 // 5xx=执行错——没有"agent 可能已接单"的模糊地带，一律未送达走兜底。
                 tracing::error!(
                     "[notify] openclaw /tools/invoke 未送达 HTTP {status}: {}（转 pushplus 兜底）",
-                    body.chars().take(200).collect::<String>()
+                    truncate_chars(&body, 200)
                 );
                 false
             }

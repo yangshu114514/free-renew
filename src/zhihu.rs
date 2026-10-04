@@ -118,7 +118,7 @@ impl ZhihuClient {
     /// 四步共用同一条校验链，不会再出现"某一步漏了状态码检查"。
     fn send_checked(&self, rb: reqwest::blocking::RequestBuilder, what: &str) -> Result<String> {
         let resp = rb.send().with_context(|| format!("知乎{what}请求失败"))?;
-        let (status, body) = read(resp)?;
+        let (status, body) = crate::http::read(resp)?;
         check_block(status, &body)?;
         ensure_2xx(status, &body, what)?;
         Ok(body)
@@ -326,12 +326,6 @@ fn topic_score(want: &str, name: &str) -> Option<usize> {
     } else {
         None
     }
-}
-
-fn read(resp: reqwest::blocking::Response) -> Result<(u16, String)> {
-    let status = resp.status().as_u16();
-    let body = resp.text().context("读取响应体失败")?;
-    Ok((status, body))
 }
 
 /// 风控/验证码识别：命中即硬错误（绝不重试猛戳）。

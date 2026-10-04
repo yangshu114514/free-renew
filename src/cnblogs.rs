@@ -211,15 +211,12 @@ impl CnblogsClient {
             .body(body)
             .send()
             .with_context(|| format!("博客园 XML-RPC 请求失败（端点 {}）", self.endpoint))?;
-        let status = resp.status();
-        let text = resp.text().context("博客园响应读取失败")?;
         // 先看 HTTP 状态再解析 XML：反过来的话，网关返回的 HTML 错误页会以
-        // "响应缺少 <string>" 上报，把 4xx/5xx 的真相盖掉（zhihu.rs 同款纪律）
-        if !status.is_success() {
-            bail!(
-                "博客园 HTTP {status}: {}",
-                crate::http::truncate_chars(&text, 200)
-            );
+        // "响应缺少 <string>" 上报，把 4xx/5xx 的真相盖掉（zhihu.rs 同款纪律；
+        // http::read 就是这条"先状态后体"纪律的统一实现）
+        let (status, text) = crate::http::read(resp)?;
+        if !(200..300).contains(&status) {
+            bail!("博客园 HTTP {status}: {}", crate::http::truncate_chars(&text, 200));
         }
         let id = parse_new_post_response(&text)?;
         Ok(format!("{POST_BASE}/{}/p/{id}.html", self.blog_user))

@@ -181,13 +181,10 @@ impl std::fmt::Debug for CloudAccount {
     }
 }
 
-/// 凭据的 Debug 呈现：只给长度，不给内容。
+/// 凭据的 Debug 呈现：只给长度，不给内容。（实现已上移 `crate::http::redact`，此处保留薄包装
+/// 以免改动本文件内十几处调用点。）
 fn redact(secret: &str) -> String {
-    if secret.trim().is_empty() {
-        "<空>".to_string()
-    } else {
-        format!("<已隐藏 {} 字符>", secret.chars().count())
-    }
+    crate::http::redact(secret)
 }
 
 #[derive(Clone)]
@@ -385,6 +382,24 @@ pub struct AppConfig {
     pub notify: NotifyConfig,
     pub article_ready_timeout: u64,
     pub http_timeout: u64,
+}
+
+impl AppConfig {
+    /// 发文平台是否已配置就绪（段存在 + 凭据有值）。
+    ///
+    /// `.as_ref().map(|x| x.ready()).unwrap_or(false)` 这个表达式在 main.rs 与 probe.rs
+    /// 共 8 处——加一个平台要改两个文件、每处都得记得写全，漏一处就是
+    /// "配了平台但探针/事件里永远显示未就绪"。收敛到一个按名查询的入口后，
+    /// 新增平台只需在下面 match 里加一行。
+    pub fn platform_ready(&self, name: &str) -> bool {
+        match name {
+            "csdn" => self.csdn.as_ref().map(|c| c.ready()).unwrap_or(false),
+            "zhihu" => self.zhihu.as_ref().map(|z| z.ready()).unwrap_or(false),
+            "devto" => self.devto.as_ref().map(|d| d.ready()).unwrap_or(false),
+            "cnblogs" => self.cnblogs.as_ref().map(|c| c.ready()).unwrap_or(false),
+            _ => false,
+        }
+    }
 }
 
 /// 兜底平台判定（纯函数便于测试）。explicit 来自 PLATFORM_FALLBACK / 文件段：

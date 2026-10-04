@@ -179,8 +179,7 @@ fn test_write(cfg: &AppConfig, run: &RunContext) -> Result<()> {
 }
 
 fn test_zhihu(cfg: &AppConfig, run: &RunContext) -> Result<()> {
-    let ready = cfg.zhihu.as_ref().map(|z| z.ready()).unwrap_or(false);
-    if !ready {
+    if !cfg.platform_ready("zhihu") {
         bail!("--test-zhihu 需要知乎 Cookie：设 ZHIHU_COOKIES 环境变量或 config.toml [platform.zhihu]");
     }
     let args = ProbeArgs::from_env();
@@ -233,17 +232,11 @@ fn test_platforms(cfg: &AppConfig, run: &RunContext) -> Result<()> {
     };
     let who = probe_who(cfg);
     let mut tried = Vec::new();
-    if cfg.zhihu.as_ref().map(|z| z.ready()).unwrap_or(false) {
-        tried.push(("zhihu", publish_on(cfg, "zhihu", who, &article, false)));
-    }
-    if cfg.csdn.as_ref().map(|c| c.ready()).unwrap_or(false) {
-        tried.push(("csdn", publish_on(cfg, "csdn", who, &article, false)));
-    }
-    if cfg.devto.as_ref().map(|d| d.ready()).unwrap_or(false) {
-        tried.push(("devto", publish_on(cfg, "devto", who, &article, false)));
-    }
-    if cfg.cnblogs.as_ref().map(|c| c.ready()).unwrap_or(false) {
-        tried.push(("cnblogs", publish_on(cfg, "cnblogs", who, &article, false)));
+    // 平台清单收敛到 AppConfig::platform_ready：新增平台时这里不用再抄一行 if
+    for name in ["zhihu", "csdn", "devto", "cnblogs"] {
+        if cfg.platform_ready(name) {
+            tried.push((name, publish_on(cfg, name, who, &article, false)));
+        }
     }
     if tried.is_empty() {
         bail!(

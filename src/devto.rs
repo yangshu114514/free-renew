@@ -111,17 +111,15 @@ impl DevtoClient {
             .send()
             .context("dev.to 发文请求失败")?;
 
-        let status = resp.status();
-        let body = resp.text().context("dev.to 响应读取失败")?;
+        let (status, body) = crate::http::read(resp)?;
 
-        if !status.is_success() {
+        if !(200..300).contains(&status) {
             // 实测：伪造/失效的 key 返回 **403**（不是 401），两种都归到"凭据问题"
             // 给同一条可执行结论，别让人对着一个裸状态码猜。
-            if matches!(status.as_u16(), 401 | 403) {
+            if matches!(status, 401 | 403) {
                 bail!(
-                    "dev.to 拒绝发文（HTTP {}）：API key 无效或已吊销，\
-                     请到 dev.to/settings/extensions 重新签发并更新 DEVTO_API_KEY",
-                    status.as_u16()
+                    "dev.to 拒绝发文（HTTP {status}）：API key 无效或已吊销，\
+                     请到 dev.to/settings/extensions 重新签发并更新 DEVTO_API_KEY"
                 );
             }
             bail!("dev.to HTTP {status}: {}", truncate_chars(&body, 300));
@@ -140,10 +138,7 @@ impl DevtoClient {
 impl std::fmt::Debug for DevtoClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DevtoClient")
-            .field(
-                "api_key",
-                &format!("<已隐藏 {} 字符>", self.api_key.chars().count()),
-            )
+            .field("api_key", &crate::http::redact(&self.api_key))
             .finish()
     }
 }
