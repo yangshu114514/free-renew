@@ -217,8 +217,10 @@ jobs:
       NOTIFY_OPENCLAW_USER: ${{ secrets.NOTIFY_OPENCLAW_USER }}
       NOTIFY_OPENCLAW_PASSWORD: ${{ secrets.NOTIFY_OPENCLAW_PASSWORD }}
       NOTIFY_OPENCLAW_ENABLED: ${{ secrets.NOTIFY_OPENCLAW_ENABLED || 'true' }}
-      # 网关侧模型名（默认 openclaw；网关按 agentId 路由，一般不用改）
-      NOTIFY_OPENCLAW_MODEL: ${{ vars.NOTIFY_OPENCLAW_MODEL }}
+      # ⚠️ 没有 NOTIFY_OPENCLAW_MODEL：2026-10-03 在三丰云网关实测，/tools/invoke 对
+      # 带/不带 model 字段的请求返回**完全相同**的响应（假 target 触发同样的
+      # tool_error）——网关静默忽略它。工具直调不经 LLM（见 notify.rs 的说明），
+      # 本来就没有模型可选，原透传是死配置，已随 OpenClawNotify.model 一并删除。
       # PushPlus 兜底通道：填 token（Secrets）后，openclaw 未送达时自动改走 pushplus 推微信。
       # GHA 出口 IP 被 Cloudflare 边缘拦 403 时（自建网关走 CF 橙云即此症状），这是可靠兜底；
       # pushplus.plus 是公网直连，不经过 CF。免费层每日 200 条，告警场景绰绰有余。

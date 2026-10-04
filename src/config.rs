@@ -25,8 +25,7 @@
 use std::collections::BTreeMap;
 
 use crate::file_config::{
-    default_openclaw_model, default_temperature, CloudAccountConfig, FileConfig,
-    OpenClawNotifyConfig,
+    default_temperature, CloudAccountConfig, FileConfig, OpenClawNotifyConfig,
 };
 
 /// 云厂商元数据（源自 2020 FreeServer 逆向 + 2026-09 实测存活）。
@@ -119,7 +118,6 @@ pub const ENV_KEYS: &[&str] = &[
     "NOTIFY_OPENCLAW_URL",
     "NOTIFY_OPENCLAW_USER",
     "NOTIFY_OPENCLAW_PASSWORD",
-    "NOTIFY_OPENCLAW_MODEL",
     // openclaw 后端开关（0/false/no/off 关，默认开）。此前不在此清单里，
     // 在 Actions 配了 Secret 也透传不到且无报错（2026-10-03 审计发现 [4]）
     "NOTIFY_OPENCLAW_ENABLED",
@@ -381,7 +379,10 @@ pub struct OpenClawNotify {
     pub url: String,
     pub basic_user: String,
     pub basic_password: String,
-    pub model: String,
+    // ⚠️ 没有 model 字段：2026-10-03 在三丰云网关实测，/tools/invoke 对带/不带
+    // `model` 的请求返回**完全相同**的响应（"tool execution failed"，假 target 触发），
+    // 即网关静默忽略该字段。工具直调不经 LLM（见 notify.rs 的说明），本来就没有
+    // 模型可选——留着只会让人以为设 NOTIFY_OPENCLAW_MODEL 有用（实际零效果）。
 }
 
 impl std::fmt::Debug for OpenClawNotify {
@@ -390,7 +391,6 @@ impl std::fmt::Debug for OpenClawNotify {
             .field("url", &self.url)
             .field("basic_user", &self.basic_user)
             .field("basic_password", &redact(&self.basic_password))
-            .field("model", &self.model)
             .finish()
     }
 }
@@ -905,7 +905,6 @@ fn load_openclaw(section: Option<&OpenClawNotifyConfig>, env: &EnvMap) -> Option
     let url_env = env.get("NOTIFY_OPENCLAW_URL").cloned();
     let user_env = env.get("NOTIFY_OPENCLAW_USER").cloned();
     let pass_env = env.get("NOTIFY_OPENCLAW_PASSWORD").cloned();
-    let model_env = env.get("NOTIFY_OPENCLAW_MODEL").cloned();
 
     // 文件段在 → 就以文件为骨架，环境变量逐字段覆盖
     if let Some(o) = section {
@@ -913,7 +912,6 @@ fn load_openclaw(section: Option<&OpenClawNotifyConfig>, env: &EnvMap) -> Option
             url: url_env.unwrap_or_else(|| o.url.clone()),
             basic_user: user_env.unwrap_or_else(|| o.basic_user.clone()),
             basic_password: pass_env.unwrap_or_else(|| o.basic_password.clone()),
-            model: model_env.unwrap_or_else(|| o.model.clone()),
         });
     }
 
@@ -941,7 +939,6 @@ fn load_openclaw(section: Option<&OpenClawNotifyConfig>, env: &EnvMap) -> Option
         url: url_env?,
         basic_user: user_env?,
         basic_password: pass_env?,
-        model: model_env.unwrap_or_else(default_openclaw_model),
     })
 }
 

@@ -269,13 +269,10 @@ pub struct OpenClawNotifyConfig {
     pub url: String,
     pub basic_user: String,
     pub basic_password: String,
-    /// 固定 "openclaw"（网关按 agentId 路由）
-    #[serde(default = "default_openclaw_model")]
-    pub model: String,
-}
-
-pub fn default_openclaw_model() -> String {
-    "openclaw".into()
+    // ⚠️ 没有 model 字段：2026-10-03 在三丰云网关实测，/tools/invoke 对带/不带
+    // `model` 的请求返回完全相同的响应——网关静默忽略该字段（工具直调不经 LLM，
+    // 本来就没有模型可选）。config.toml 里若残留 `model = "…"` 会被 serde 忽略并给出
+    // 未知字段警告（deny_unknown_fields 未开，不致失败）。
 }
 
 #[derive(Debug, Clone, Deserialize)]

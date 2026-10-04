@@ -887,52 +887,11 @@ fn notify_backend_label(notify: &NotifyConfig) -> String {
     }
 }
 
-fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
-
-    let run = logging::RunContext::init()?;
-    let args: Vec<String> = std::env::args().collect();
-    let cli = parse_args(&args)?;
-
-    tracing::info!("=== free-renew 开始 run_id={} ===", run.run_id);
-    run.event(
-        "run.start",
-        "ok",
-        json!({
-            "version": env!("CARGO_PKG_VERSION"),
-            "args": loggable_args(&args),
-        }),
-    );
-
-    // 配置文件存在但坏 = 硬错误：走 Result 而不是 panic，这样事件日志里
-    // 能留下完整错误链（进程崩溃的话只剩一段栈回溯，artifact 里什么线索都没有）
-    let cfg = match AppConfig::load(cli.config_path.as_deref()) {
-        Ok(c) => c,
-        Err(e) => {
-            run.event("run.config", "failed", json!({"error": format!("{e:#}")}));
-            return Err(e);
-        }
-    };
-
-    // 诊断子命令（--test-notify / --test-screenshot / --test-write / --test-zhihu）：
-    // 命中则执行并在此提前返回，不进入真实续期流程。逻辑见 probe.rs。
-    if probe::run_if_probe(&cfg, &run)? {
-        return Ok(());
-    }
-
-    if cfg.accounts.is_empty() {
-        run.event("run.config", "failed", json!({"reason": "no_accounts"}));
-        anyhow::bail!(
-            "未配置任何云账号（config.toml [clouds.*] 或 SANFENGYUN_/ABEIYUN_ 环境变量）"
-        );
-    }
-    if cfg.llm.is_none() {
-        tracing::warn!("LLM 未配置：到期时将无法生成文章（仅查询状态可用）");
-    }
+/// run.config 事件（配置快照）：账号清单、平台就绪度、通知后端、透传进来的 env 名。
+///
+/// 这份快照是排障的"第一现场"——"我明明配了 X 却没生效"最快的一眼：变量没出现在
+/// `env_present` 里，就是它在工作流里没被透传（Actions 最常见的原因是 env 段少一行）。
+fn emit_run_config(cfg: &AppConfig, run: &logging::RunContext) {
     run.event(
         "run.config",
         "ok",
@@ -945,9 +904,6 @@ fn main() -> Result<()> {
             "zhihu_ready": cfg.platform_ready("zhihu"),
             "devto_ready": cfg.platform_ready("devto"),
             "notify_backend": notify_backend_label(&cfg.notify),
-            // 本次真正传进来的可选项环境变量名（只有名字，没有值）。
-            // 排障"我明明配了 X 却没生效"最快的一眼：变量没出现在这里，
-            // 就是它在工作流里没被透传（Actions 最常见的原因是 env 段少一行）。
             "env_present": config::ENV_KEYS
                 .iter()
                 .copied()
@@ -955,16 +911,27 @@ fn main() -> Result<()> {
                 .collect::<Vec<_>>(),
         }),
     );
+}
 
-    // 逐账号串行续期。process_account 内部已把失败写进事件与通知，这里只负责统计。
-    // 曾经的 unwrap_or(false) 把 Err 静默降级成"未成功"——日志里连一行根因都不留。
+/// 逐账号串行续期并汇总退出。
+///
+/// 返回 `(续期数, 跳过数, 网络未完成数, 失败数)`。process_account 内部已把失败写进
+/// 事件与通知，这里只负责统计——曾经的 unwrap_or(false) 把 Err 静默降级成"未成功"，
+/// 日志里连一行根因都不留。
+///
+/// 退出决策也在这里：真失败（NeedHuman）必须非零退出；而**纯**网络原因未完成则退出 0
+/// ——判红会把"厂商抖了一下"变成 GitHub 失败邮件 + 一遍遍假警报（见下）。
+fn run_accounts(
+    cfg: &AppConfig,
+    run: &logging::RunContext,
+) -> Result<(usize, usize, usize, usize)> {
     let mut renewed = 0usize;
     let mut skipped = 0usize;
     let mut transient = 0usize;
     let mut failures = 0usize;
     for account in &cfg.accounts {
         tracing::info!("--- 账号 {} ({}) ---", account.id, account.label);
-        match process_account(&cfg, &run, account) {
+        match process_account(cfg, run, account) {
             Ok(AccountOutcome::Renewed) => renewed += 1,
             Ok(AccountOutcome::Skipped) => skipped += 1,
             Ok(AccountOutcome::Transient) => transient += 1,
@@ -1015,13 +982,65 @@ fn main() -> Result<()> {
             "=== free-renew 结束，耗时 {} 秒（续期 {renewed}／跳过 {skipped}／网络原因未完成 {transient}）===",
             run.elapsed_secs()
         );
-        return Ok(());
+        return Ok((renewed, skipped, transient, failures));
     }
     run.event("run.end", "ok", summary);
     tracing::info!(
         "=== free-renew 结束，耗时 {} 秒（续期 {renewed}／跳过 {skipped}）===",
         run.elapsed_secs()
     );
+    Ok((renewed, skipped, transient, failures))
+}
+
+fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+
+    let run = logging::RunContext::init()?;
+    let args: Vec<String> = std::env::args().collect();
+    let cli = parse_args(&args)?;
+
+    tracing::info!("=== free-renew 开始 run_id={} ===", run.run_id);
+    run.event(
+        "run.start",
+        "ok",
+        json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "args": loggable_args(&args),
+        }),
+    );
+
+    // 配置文件存在但坏 = 硬错误：走 Result 而不是 panic，这样事件日志里
+    // 能留下完整错误链（进程崩溃的话只剩一段栈回溯，artifact 里什么线索都没有）
+    let cfg = match AppConfig::load(cli.config_path.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            run.event("run.config", "failed", json!({"error": format!("{e:#}")}));
+            return Err(e);
+        }
+    };
+
+    // 诊断子命令（--test-notify / --test-screenshot / --test-write / --test-zhihu）：
+    // 命中则执行并在此提前返回，不进入真实续期流程。逻辑见 probe.rs。
+    if probe::run_if_probe(&cfg, &run)? {
+        return Ok(());
+    }
+
+    if cfg.accounts.is_empty() {
+        run.event("run.config", "failed", json!({"reason": "no_accounts"}));
+        anyhow::bail!(
+            "未配置任何云账号（config.toml [clouds.*] 或 SANFENGYUN_/ABEIYUN_ 环境变量）"
+        );
+    }
+    if cfg.llm.is_none() {
+        tracing::warn!("LLM 未配置：到期时将无法生成文章（仅查询状态可用）");
+    }
+    emit_run_config(&cfg, &run);
+
+    run_accounts(&cfg, &run)?;
     Ok(())
 }
 

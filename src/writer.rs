@@ -637,6 +637,133 @@ fn retry_guidance(problems: &[String]) -> Vec<String> {
     tips
 }
 
+/// 单轮尝试的结果。
+enum AttemptOutcome {
+    /// 合格，直接采用
+    Accepted(Article),
+    /// 不合格：问题清单 + 原文（原文供放弃时落日志）
+    Rejected(Vec<String>, String),
+}
+
+/// 一次重试会话里**不变**的部分：客户端、端点、必含关键词。
+///
+/// 提成结构体而不是让 `attempt_once` 收 8 个参数——clippy 默认 7 个就报
+/// too_many_arguments，而且这些值本来在所有轮次里就不变，作为一组传递
+/// 语义也更清楚（"这一轮的上下文"）。
+struct AttemptCtx<'a> {
+    client: &'a reqwest::blocking::Client,
+    url: &'a str,
+    required: &'a [String],
+}
+
+/// 单轮：选角度/字数 → 拼 prompt → 调 LLM → 机器校验。
+///
+/// 从 [`generate_article`] 提出来的"试一次"——原函数 149 行里混着五件事
+/// （构客户端、洗人设池、循环编排、调 API、放弃诊断），现在这层只负责
+/// "一次完整尝试"，重试编排留在主循环，两边都能独立读。
+fn attempt_once(
+    ctx: &AttemptCtx<'_>,
+    llm: &LlmConfig,
+    profile: &CloudProfile,
+    persona: (&str, &str),
+    retry_feedback: &[String],
+    rng: &mut rand::rngs::ThreadRng,
+) -> Result<AttemptOutcome> {
+    let angle = llm
+        .angles
+        .choose(rng)
+        .map(String::as_str)
+        .unwrap_or("写一次通用的使用体验");
+    // 字数池为空只可能来自手写配置（config.rs 已兜默认），兜到池内首档；
+    // 不编一个池外的 400——那与本文件声明的区间自相矛盾
+    let length = llm
+        .lengths
+        .choose(rng)
+        .copied()
+        .unwrap_or(DEFAULT_LENGTHS[0]);
+
+    let user = user_prompt(
+        angle,
+        length,
+        profile,
+        ctx.required,
+        &llm.forbidden_words,
+        persona,
+    );
+    let mut messages = vec![
+        json!({"role": "system", "content": system_prompt()}),
+        json!({"role": "user", "content": user}),
+    ];
+    // 上一版被判不合格——只追加"本轮要改什么"，不塞旧正文（旧人设会串味）。
+    // 处方由 retry_guidance 按实际问题逐条生成，不再是一句写死的文风建议：
+    // 缺关键词/串厂商/带链接这些非风格问题，收到"不要套话"是纯噪音。
+    if !retry_feedback.is_empty() {
+        let all = retry_feedback.join("；");
+        let tips = retry_guidance(retry_feedback);
+        messages.push(json!({
+            "role": "user",
+            "content": format!(
+                "上一版被判定不合格，问题：{all}。重写一篇，这次务必逐条做到：{}。",
+                tips.join("；")
+            )
+        }));
+    }
+
+    let mut payload = json!({
+        "model": llm.model,
+        "messages": messages,
+        "temperature": llm.temperature,
+    });
+    if llm.disable_thinking {
+        // ModelScope Qwen3 系列：不关 thinking 首轮返回 choices:null。
+        // 该字段非 OpenAI 标准，其它供应商不认——用 ai.disable_thinking=false 关掉。
+        payload["enable_thinking"] = json!(false);
+    }
+
+    let resp = ctx
+        .client
+        .post(ctx.url)
+        .bearer_auth(&llm.api_key)
+        .json(&payload)
+        .send()
+        .context("LLM 请求失败")?;
+    let (status, body) = crate::http::read(resp)?;
+    if !(200..300).contains(&status) {
+        bail!(
+            "LLM HTTP {status}: {}",
+            crate::http::truncate_chars(&body, 300)
+        );
+    }
+
+    let text = serde_json::from_str::<serde_json::Value>(&body)
+        .context("LLM 响应 JSON 解析失败")?
+        .pointer("/choices/0/message/content")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .map(str::to_string)
+        .context("LLM 响应缺少 content")?;
+
+    let mut problems = validate(
+        &text,
+        profile,
+        ctx.required,
+        &llm.forbidden_words,
+        &llm.lengths,
+    );
+    if problems.is_empty() {
+        if let Some((title, body_markdown)) = split_title_body(&text) {
+            return Ok(AttemptOutcome::Accepted(Article {
+                word_count: body_markdown.chars().count(),
+                title,
+                body_markdown,
+            }));
+        }
+        // 无标题的文章审核通过率极低，等同不合规，重试
+        problems.push("第一行不是合法的 # 标题".into());
+    }
+    Ok(AttemptOutcome::Rejected(problems, text))
+}
+
 pub fn generate_article(llm: &LlmConfig, profile: &CloudProfile) -> Result<Article> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(llm.timeout_secs))
@@ -658,113 +785,29 @@ pub fn generate_article(llm: &LlmConfig, profile: &CloudProfile) -> Result<Artic
     // "缺少关键词 X"到底长什么样、是漏写还是换了近义词，事后完全无从判断
     // （2026-10-03 为此又白烧了一次 runner）。
     let mut last_text = String::new();
+    let ctx = AttemptCtx {
+        client: &client,
+        url: &url,
+        required: &required,
+    };
     for attempt in 0..llm.max_retries as usize {
-        let angle = llm
-            .angles
-            .choose(&mut rng)
-            .map(String::as_str)
-            .unwrap_or("写一次通用的使用体验");
-        // 字数池为空只可能来自手写配置（config.rs 已兜默认），兜到池内首档；
-        // 不编一个池外的 400——那与本文件声明的区间自相矛盾
-        let length = llm
-            .lengths
-            .choose(&mut rng)
-            .copied()
-            .unwrap_or(DEFAULT_LENGTHS[0]);
         let persona = personas[attempt % personas.len()];
-
-        let user = user_prompt(
-            angle,
-            length,
-            profile,
-            &required,
-            &llm.forbidden_words,
-            *persona,
-        );
-        let mut messages = vec![
-            json!({"role": "system", "content": system_prompt()}),
-            json!({"role": "user", "content": user}),
-        ];
-        // 上一版被判不合格——只追加"本轮要改什么"，不塞旧正文（旧人设会串味）。
-        // 处方由 retry_guidance 按实际问题逐条生成，不再是一句写死的文风建议：
-        // 缺关键词/串厂商/带链接这些非风格问题，收到"不要套话"是纯噪音。
-        if !retry_feedback.is_empty() {
-            let all = retry_feedback.join("；");
-            let tips = retry_guidance(&retry_feedback);
-            messages.push(json!({
-                "role": "user",
-                "content": format!(
-                    "上一版被判定不合格，问题：{all}。重写一篇，这次务必逐条做到：{}。",
-                    tips.join("；")
-                )
-            }));
-        }
-
-        let mut payload = json!({
-            "model": llm.model,
-            "messages": messages,
-            "temperature": llm.temperature,
-        });
-        if llm.disable_thinking {
-            // ModelScope Qwen3 系列：不关 thinking 首轮返回 choices:null。
-            // 该字段非 OpenAI 标准，其它供应商不认——用 ai.disable_thinking=false 关掉。
-            payload["enable_thinking"] = json!(false);
-        }
-
-        let resp = client
-            .post(&url)
-            .bearer_auth(&llm.api_key)
-            .json(&payload)
-            .send()
-            .context("LLM 请求失败")?;
-        let (status, body) = crate::http::read(resp)?;
-        if !(200..300).contains(&status) {
-            bail!(
-                "LLM HTTP {status}: {}",
-                crate::http::truncate_chars(&body, 300)
-            );
-        }
-
-        let text = serde_json::from_str::<serde_json::Value>(&body)
-            .context("LLM 响应 JSON 解析失败")?
-            .pointer("/choices/0/message/content")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .map(str::to_string)
-            .context("LLM 响应缺少 content")?;
-
-        let mut problems = validate(
-            &text,
-            profile,
-            &required,
-            &llm.forbidden_words,
-            &llm.lengths,
-        );
-        if problems.is_empty() {
-            match split_title_body(&text) {
-                Some((title, body_markdown)) => {
-                    return Ok(Article {
-                        word_count: body_markdown.chars().count(),
-                        title,
-                        body_markdown,
-                    });
+        match attempt_once(&ctx, llm, profile, *persona, &retry_feedback, &mut rng)? {
+            AttemptOutcome::Accepted(article) => return Ok(article),
+            AttemptOutcome::Rejected(problems, text) => {
+                // 累积问题清单喂回下一轮（只记问题，不记旧正文，避免人设串味）。
+                // 去重必须用 contains：dedup() 只合并**相邻**重复，而新问题恒追加在末尾，
+                // 原写法实际是恒不生效的空操作。
+                last_problems = problems.clone();
+                last_text = text;
+                let feedback = problems.join("；");
+                if !retry_feedback.contains(&feedback) {
+                    retry_feedback.push(feedback);
                 }
-                // 无标题的文章审核通过率极低，等同不合规，重试
-                None => problems.push("第一行不是合法的 # 标题".into()),
+                if retry_feedback.len() > MAX_RETRY_FEEDBACK {
+                    retry_feedback.remove(0);
+                }
             }
-        }
-
-        // 累积问题清单喂回下一轮（只记问题，不记旧正文，避免人设串味）。
-        // 去重必须用 contains：dedup() 只合并**相邻**重复，而新问题恒追加在末尾，
-        // 原写法实际是恒不生效的空操作。
-        last_problems = problems.clone();
-        last_text = text.clone();
-        let feedback = problems.join("；");
-        if !retry_feedback.contains(&feedback) {
-            retry_feedback.push(feedback);
-        }
-        if retry_feedback.len() > MAX_RETRY_FEEDBACK {
-            retry_feedback.remove(0);
         }
     }
 
