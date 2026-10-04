@@ -119,9 +119,8 @@ impl CsdnClient {
             .send()
             .context("CSDN saveArticle 请求失败")?;
 
-        let status = resp.status();
-        let body = resp.text().context("CSDN 响应读取失败")?;
-        if !status.is_success() {
+        let (status, body) = crate::http::read(resp)?;
+        if !(200..300).contains(&status) {
             // CSDN 新号每日发文额度有限（实测约 2 篇/天）。这是硬额度，同日重试
             // 永远不会成功，反而继续空耗——识别出来直接给可执行结论，不套通用 400
             if body.contains("发表文章数量已达到限制") || body.contains("400300012") {
@@ -130,10 +129,7 @@ impl CsdnClient {
                      请明日额度重置后由定时任务自动重试，或提升 CSDN 账号等级以增加每日发文数"
                 );
             }
-            bail!(
-                "CSDN HTTP {status}: {}",
-                crate::http::truncate_chars(&body, 300)
-            );
+            bail!("CSDN HTTP {status}: {}", crate::http::truncate_chars(&body, 300));
         }
 
         let v: serde_json::Value =
