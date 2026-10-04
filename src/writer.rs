@@ -719,7 +719,10 @@ pub fn generate_article(llm: &LlmConfig, profile: &CloudProfile) -> Result<Artic
             .context("LLM 请求失败")?;
         let (status, body) = crate::http::read(resp)?;
         if !(200..300).contains(&status) {
-            bail!("LLM HTTP {status}: {}", crate::http::truncate_chars(&body, 300));
+            bail!(
+                "LLM HTTP {status}: {}",
+                crate::http::truncate_chars(&body, 300)
+            );
         }
 
         let text = serde_json::from_str::<serde_json::Value>(&body)

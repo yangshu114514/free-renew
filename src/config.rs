@@ -1100,7 +1100,10 @@ mod tests {
         // 普通空白照旧由 trim 处理
         assert_eq!(clean_env_value("  csdn\n"), "csdn");
         // 中文凭据不受剥 BOM 影响（防止清洗误伤正文）
-        assert_eq!(clean_env_value("\u{feff}三丰云 免费虚拟主机"), "三丰云 免费虚拟主机");
+        assert_eq!(
+            clean_env_value("\u{feff}三丰云 免费虚拟主机"),
+            "三丰云 免费虚拟主机"
+        );
         // 全是 BOM → 空串（随后被 env_snapshot 丢弃，不产生"空值占位"）
         assert_eq!(clean_env_value("\u{feff}\u{feff}"), "");
         // 中间内容里的 BOM 不能被误删（只清边界）
@@ -1122,7 +1125,11 @@ mod tests {
     fn trim_alone_cannot_remove_bom() {
         // 证明 U+FEFF 不是 Unicode White_Space（所以 str::trim 去不掉它）。
         // 这条是上面那组测试的"为什么"，改 impl 的人会先看到它。
-        assert_eq!("\u{feff}devto".trim(), "\u{feff}devto", "trim 确实去不掉 BOM");
+        assert_eq!(
+            "\u{feff}devto".trim(),
+            "\u{feff}devto",
+            "trim 确实去不掉 BOM"
+        );
         assert_ne!(clean_env_value("\u{feff}devto"), "\u{feff}devto");
     }
 
