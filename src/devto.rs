@@ -179,7 +179,10 @@ mod tests {
         let a: CreatedArticle = serde_json::from_str(body).expect("解析 201 响应");
         assert_eq!(a.id, 123456);
         assert!(a.url.starts_with("https://dev.to/"));
-        assert!(!a.url.trim_end_matches('/').ends_with("123456"), "url 与 id 无强绑定");
+        assert!(
+            !a.url.trim_end_matches('/').ends_with("123456"),
+            "url 与 id 无强绑定"
+        );
     }
 
     /// key 为空时必须**在出网之前**失败，且提示里要指出该设哪个环境变量。

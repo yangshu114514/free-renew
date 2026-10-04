@@ -18,9 +18,9 @@
 #![forbid(unsafe_code)]
 
 mod cloud;
+mod cnblogs;
 mod config;
 mod csdn;
-mod cnblogs;
 mod devto;
 mod file_config;
 mod http;
@@ -112,8 +112,8 @@ fn is_transient_network_error(err: &anyhow::Error) -> bool {
     }
 
     const NETWORK: [&str; 12] = [
-        "error sending request",     // reqwest 发送失败的通用外层措辞
-        "operation timed out",       // connect 超时（本次事故的原话）
+        "error sending request", // reqwest 发送失败的通用外层措辞
+        "operation timed out",   // connect 超时（本次事故的原话）
         "timed out",
         "timeout",
         "connection refused",
@@ -121,9 +121,9 @@ fn is_transient_network_error(err: &anyhow::Error) -> bool {
         "connection aborted",
         "dns error",
         "failed to lookup address",
-        "unexpected eof",            // TLS 被中途切断
+        "unexpected eof", // TLS 被中途切断
         "handshake",
-        "读取响应体失败",             // cloud.rs 在重试循环里收集的那条
+        "读取响应体失败", // cloud.rs 在重试循环里收集的那条
     ];
     NETWORK.iter().any(|k| chain.contains(k))
 }
@@ -156,7 +156,10 @@ fn fail<T>(
     let detail = format!("{err:#}");
     let transient = is_transient_network_error(err);
     if transient {
-        tracing::warn!("{} {what}未完成（网络原因，非故障）: {detail}", who(account));
+        tracing::warn!(
+            "{} {what}未完成（网络原因，非故障）: {detail}",
+            who(account)
+        );
     } else {
         tracing::error!("{} {what}失败: {detail}", who(account));
     }
@@ -175,7 +178,10 @@ fn fail<T>(
         // 他管的东西。这里明确讲清"下次自动重试、无需人工介入"。
         notify::send(
             &cfg.notify,
-            &format!("⏳ {} {what}未完成（网络原因，无需人工介入）", account.label),
+            &format!(
+                "⏳ {} {what}未完成（网络原因，无需人工介入）",
+                account.label
+            ),
             &format!(
                 "{detail}\n\n这不是故障：本轮没连上厂商。程序幂等，下次定时任务会自动重试\
                  （续费窗口约 5 天，每小时都会再试一次），**无需人工介入**。"
@@ -560,7 +566,10 @@ fn stage_submit(
             if transient {
                 notify::send(
                     &cfg.notify,
-                    &format!("⏳ {} 续期提交未完成（网络原因，无需人工介入）", account.label),
+                    &format!(
+                        "⏳ {} 续期提交未完成（网络原因，无需人工介入）",
+                        account.label
+                    ),
                     &format!(
                         "{detail}\n\n这不是故障：文章已发出，只是提交请求没连上厂商。\
                          下次定时任务会自动重试（续费窗口约 5 天），**无需人工介入**。"
@@ -568,7 +577,11 @@ fn stage_submit(
                 );
                 AccountOutcome::Transient
             } else {
-                notify::send(&cfg.notify, &format!("{} 续期提交异常", account.label), &detail);
+                notify::send(
+                    &cfg.notify,
+                    &format!("{} 续期提交异常", account.label),
+                    &detail,
+                );
                 AccountOutcome::NeedHuman
             }
         }

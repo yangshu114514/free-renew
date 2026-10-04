@@ -129,7 +129,10 @@ impl CsdnClient {
                      请明日额度重置后由定时任务自动重试，或提升 CSDN 账号等级以增加每日发文数"
                 );
             }
-            bail!("CSDN HTTP {status}: {}", crate::http::truncate_chars(&body, 300));
+            bail!(
+                "CSDN HTTP {status}: {}",
+                crate::http::truncate_chars(&body, 300)
+            );
         }
 
         let v: serde_json::Value =

@@ -216,7 +216,10 @@ impl CnblogsClient {
         // http::read 就是这条"先状态后体"纪律的统一实现）
         let (status, text) = crate::http::read(resp)?;
         if !(200..300).contains(&status) {
-            bail!("博客园 HTTP {status}: {}", crate::http::truncate_chars(&text, 200));
+            bail!(
+                "博客园 HTTP {status}: {}",
+                crate::http::truncate_chars(&text, 200)
+            );
         }
         let id = parse_new_post_response(&text)?;
         Ok(format!("{POST_BASE}/{}/p/{id}.html", self.blog_user))

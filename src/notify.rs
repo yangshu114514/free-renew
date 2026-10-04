@@ -66,7 +66,9 @@ pub fn send(cfg: &NotifyConfig, title: &str, detail: &str) {
     let openclaw_enabled = crate::config::openclaw_notify_enabled();
     if let Some(oc) = &cfg.openclaw {
         if !openclaw_enabled {
-            tracing::warn!("[notify] openclaw 后端已停用（NOTIFY_OPENCLAW_ENABLED），直接走 pushplus 兜底");
+            tracing::warn!(
+                "[notify] openclaw 后端已停用（NOTIFY_OPENCLAW_ENABLED），直接走 pushplus 兜底"
+            );
         } else {
             delivered = send_openclaw(oc, title, detail);
         }
@@ -171,7 +173,9 @@ fn send_openclaw(oc: &OpenClawNotify, title: &str, detail: &str) -> bool {
             let status = resp.status();
             let body = resp.text().unwrap_or_default();
             if status.is_success() && body.contains("\"ok\":true") {
-                tracing::info!("[notify] openclaw 工具直调送达（/tools/invoke deliveryStatus=sent）");
+                tracing::info!(
+                    "[notify] openclaw 工具直调送达（/tools/invoke deliveryStatus=sent）"
+                );
                 true
             } else {
                 // 工具直调是同步语义：401/403=鉴权或策略拒、400=参数错、404=工具未放行、
