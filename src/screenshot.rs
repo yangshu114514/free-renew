@@ -426,10 +426,16 @@ fn strip_tags(s: &str) -> String {
 }
 
 /// 裸 HTTP 就绪探测（参考性检查，非门禁）。
-/// CSDN 对非浏览器流量随机 521 挑战，此检查只能证明"可达"，不能证明"未挑战"。
-/// 真正的渲染验证在 `capture` 内（Chrome 过挑战 + 标题匹配）。
+///
+/// CSDN 对非浏览器流量随机 521 挑战，此检查只能证明"可达"、不能证明"未挑战"；
+/// dev.to 是另一种脾气——它**只看有没有 User-Agent**（见 `http::browser_client`
+/// 的实测表）。真正的渲染验证在 `capture` 内（Chrome 过挑战 + 标题匹配）。
 pub fn wait_article_ready(url: &str, timeout_secs: u64) -> Result<()> {
-    let client = reqwest::blocking::Client::new();
+    // 必须用带 UA 的客户端，别退回 `Client::new()`：reqwest 默认**不发**
+    // User-Agent，dev.to 前置的 Fastly 便对每一发都回 403 空体，这个"参考性检查"
+    // 于是**必然**空等到超时——2026-10-12 全流程实测白等了 61 秒，而同一个 URL
+    // 带上 UA 是一次就 200 的真页面（77 KB，远超挑战页阈值）。
+    let client = crate::http::browser_client(READY_PROBE_TIMEOUT_SECS)?;
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     let mut last_status;
     loop {
