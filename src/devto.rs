@@ -32,8 +32,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::http::{browser_client, redact, truncate_chars};
 
-/// dev.to API 基址（原项目常量 `DEVTO_API_URL`）。
+/// dev.to API 基址（原项目常量 `DEVTO_API_URL`）。**已含 `/api` 一段**。
 pub const API_BASE: &str = "https://dev.to/api";
+
+/// 发文端点 `POST /api/articles`。
+///
+/// 之所以抽成函数，是因为这个拼接错过一次：`API_BASE` 已含 `/api`，调用处再补一段
+/// 就打成 `https://dev.to/api/api/articles` → 404，而这类错**没有任何编译期提示**。
+/// 更麻烦的是它被上一个 bug 盖住了——请求先在 Fastly 边缘吃了 403，根本到不了
+/// 应用层，于是 404 无从暴露。2026-10-02 到 10-12 这两个错一直叠着。
+fn articles_endpoint() -> String {
+    format!("{API_BASE}/articles")
+}
 
 /// 原项目 `ClientInfo::api_version()` 的取值，作为 `api-version` 请求头发送。
 const API_VERSION: &str = "1.0.0";
@@ -109,7 +119,7 @@ impl DevtoClient {
 
         let resp = self
             .http
-            .post(format!("{API_BASE}/api/articles"))
+            .post(articles_endpoint())
             .header("api-key", &self.api_key)
             .header("api-version", API_VERSION)
             .header("Accept", "application/json")
@@ -162,6 +172,23 @@ impl std::fmt::Debug for DevtoClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回归：端点路径只能有一层 `/api`。
+    ///
+    /// 2026-10-02 到 10-12 期间这里实际打成 `https://dev.to/api/api/articles`：
+    /// `API_BASE` 自带 `/api`，调用处又补了一段。请求当时先在 Fastly 边缘吃 403，
+    /// 到不了应用层，所以这个 404 一直没机会露面——**两个 bug 叠在一起，后一个
+    /// 只在前一个被修掉之后才看得见**。这条断言就是那次教训的落点。
+    #[test]
+    fn articles_endpoint_has_exactly_one_api_segment() {
+        let url = articles_endpoint();
+        assert_eq!(url, "https://dev.to/api/articles");
+        assert_eq!(
+            url.matches("/api").count(),
+            1,
+            "路径里只应有一层 /api: {url}"
+        );
+    }
 
     /// 锁定 2026-10-02 真账号验证过的请求体形状（`{"article":{...}}` 包裹 + tags 为数组）。
     /// 若此测试挂了而接口报 422，说明 dev.to 改了 requestBody 契约。
