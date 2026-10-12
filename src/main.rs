@@ -454,11 +454,12 @@ fn stage_capture(
     article: &writer::Article,
     url: &str,
 ) -> Step<PathBuf> {
-    // 就绪检查（非致命：裸 HTTP 会被 CSDN WAF 521 挑战，仅作参考）
+    // 就绪检查（非致命：CSDN 用 WAF 521 挑战裸 HTTP，dev.to 则只看有没有 UA；
+    // 两者都只是参考）
     // 真正的门禁在 screenshot::capture 内（Chrome 过挑战 + 标题验证）。
     if let Err(e) = screenshot::wait_article_ready(url, cfg.article_ready_timeout) {
         tracing::warn!(
-            "{} 裸 HTTP 就绪检查未通过（WAF 挑战，Chrome 可过），继续截图: {e}",
+            "{} 裸 HTTP 就绪检查未通过（平台侧拦截，Chrome 可过），继续截图: {e}",
             account.label
         );
     }
