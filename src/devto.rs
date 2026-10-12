@@ -17,6 +17,11 @@
 //! **凭据**：API key 只经 [`DevtoClient::new`] 的入参流动，本模块不落任何常量；
 //! 配置层从 `DEVTO_API_KEY` 环境变量读，`Debug` 输出只给长度不给内容。
 //!
+//! **User-Agent 是硬约束**：dev.to 前置的 Fastly 对不带 `User-Agent` 的 API 请求
+//! 直接回 403 空体，而 reqwest 默认不发该头。客户端因此必须走
+//! [`crate::http::browser_client`]。2026-10-02 上线到 10-12 之间本渠道每轮续期都
+//! 卡在这里，且错误文案把 403 误报成"key 已吊销"，故障被掩盖了十天。
+//!
 //! **许可以及版权（MIT，派生自上游；本仓库整体为 Apache-2.0，二者兼容，详见 NOTICE）**
 //! ```
 //! Copyright (c) 2025 socialsbase
@@ -25,7 +30,7 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::http::truncate_chars;
+use crate::http::{browser_client, redact, truncate_chars};
 
 /// dev.to API 基址（原项目常量 `DEVTO_API_URL`）。
 pub const API_BASE: &str = "https://dev.to/api";
@@ -65,13 +70,15 @@ pub struct DevtoClient {
 
 impl DevtoClient {
     /// 凭据只在这里进、不留痕：key 为空直接判失败，不让后续请求带空头出网。
+    ///
+    /// 客户端走 [`browser_client`]——**不要换成裸 `Client::builder()`**：dev.to 前置的
+    /// Fastly 对不带 `User-Agent` 的 API 请求一律回 403 空体（reqwest 默认不发 UA 头）。
+    /// 本渠道从 2026-10-02 上线起因此一次都没成功过，直到 10-12 才查到（详见
+    /// [`crate::http::browser_client`] 的实测表）。
     pub fn new(api_key: &str) -> Result<Self> {
         Ok(Self {
             api_key: api_key.trim().to_string(),
-            http: reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .context("构建 dev.to HTTP 客户端失败")?,
+            http: browser_client(30)?,
         })
     }
 
@@ -114,15 +121,24 @@ impl DevtoClient {
         let (status, body) = crate::http::read(resp)?;
 
         if !(200..300).contains(&status) {
-            // 实测：伪造/失效的 key 返回 **403**（不是 401），两种都归到"凭据问题"
-            // 给同一条可执行结论，别让人对着一个裸状态码猜。
-            if matches!(status, 401 | 403) {
-                bail!(
-                    "dev.to 拒绝发文（HTTP {status}）：API key 无效或已吊销，\
+            // 401 与 403 是**两种不同**故障，原先合成一条"key 无效或已吊销"的文案，
+            // 于是把"被边缘层拦"一直读成"key 被吊销"——本渠道为此白查了十天。
+            //   401 = 请求已到 dev.to 应用层，凭据不对 → 换 key
+            //   403 = 请求在 Fastly 边缘就被挡下，**与 key 无关**（key 错也不会给 403）
+            match status {
+                401 => bail!(
+                    "dev.to 拒绝发文（HTTP 401）：API key 无效或已被吊销，\
                      请到 dev.to/settings/extensions 重新签发并更新 DEVTO_API_KEY"
-                );
+                ),
+                403 => bail!(
+                    "dev.to 拒绝发文（HTTP 403）：请求在 Fastly 边缘被拦，**不是 key 的问题**\
+                     （key 无效会是 401）。最常见原因是请求缺 User-Agent 头——现已由 \
+                     http::browser_client 在客户端层设死；若再现请查 dev.to 侧风控或出口 IP。\
+                     响应体: {}",
+                    truncate_chars(&body, 200)
+                ),
+                _ => bail!("dev.to HTTP {status}: {}", truncate_chars(&body, 300)),
             }
-            bail!("dev.to HTTP {status}: {}", truncate_chars(&body, 300));
         }
 
         let created: CreatedArticle =
@@ -138,7 +154,7 @@ impl DevtoClient {
 impl std::fmt::Debug for DevtoClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DevtoClient")
-            .field("api_key", &crate::http::redact(&self.api_key))
+            .field("api_key", &redact(&self.api_key))
             .finish()
     }
 }
