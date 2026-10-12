@@ -46,16 +46,18 @@ jobs:
           #   devto::tests::articles_endpoint_has_exactly_one_api_segment
           # 端到端真发文由 renew.yml 的 test_platforms 手动入口验（那会建草稿）。
           #
-          # 全程用**无效 key** 打写接口：401/403/404 都不会落任何内容，零副作用。
+          # 三条契约**全部用 GET 验**，一律用无效 key：不落任何内容，也不碰写限流。
+          # 第一版这里用 POST 打 /api/articles，跑完 ② 再打 ③ 就一路 429——
+          # dev.to 对连续的未认证写请求限流极严，**探测自己把被测对象打限流了**，
+          # 于是 ③ 成了假红。读端点的限流宽得多，而这三条契约都能从读端点看出来。
           UA="free-renew-probe"
-          body='{"article":{"title":"probe","body_markdown":"probe","published":false,"tags":[]}}'
           # $1=url $2=User-Agent（空串=不带该头） $3=api-key
           # ⚠️ 末尾必须是 `|| true` 而不是 `|| echo 000`：curl 失败时自己已经用
           # -w 输出了 000，再补一个会拼成 "000000"，判据就永远不认（probe-lib.sh
           # 第一版正是这么假通过的）。
-          post() {
-            curl -s -o /dev/null -w "%{http_code}" -m 30 -A "$2" -X POST "$1" \
-              -H "api-key: $3" -H 'content-type: application/json' -d "$body" 2>/dev/null || true
+          getcode() {
+            curl -s -o /dev/null -w "%{http_code}" -m 30 -A "$2" "$1" \
+              -H "api-key: $3" -H 'accept: application/json' 2>/dev/null || true
           }
           fail=0
 
@@ -75,9 +77,9 @@ jobs:
           # ② "不带 User-Agent 一律 403、带了才走到鉴权层给 401" 这条规律还在吗？
           #    若哪天 dev.to 撤了这层门禁，这里会红——那是"UA 从必需变成无害"的信号，
           #    可以据此再决定要不要留，但别因为它还红着就以为程序有问题。
-          no_ua=$(post 'https://dev.to/api/articles' '' 'probe-invalid-key')
-          with_ua=$(post 'https://dev.to/api/articles' "$UA" 'probe-invalid-key')
-          echo "② UA 门禁（两次都用无效 key）：不带 UA -> $no_ua，带 UA -> $with_ua"
+          no_ua=$(getcode 'https://dev.to/api/users/me' '' 'probe-invalid-key')
+          with_ua=$(getcode 'https://dev.to/api/users/me' "$UA" 'probe-invalid-key')
+          echo "② UA 门禁（都用无效 key）：不带 UA -> $no_ua，带 UA -> $with_ua"
           if [ "$no_ua" = "403" ] && [ "$with_ua" = "401" ]; then
             echo "   ✅ 与 http::browser_client 记录的实测一致（403=边缘拦下，401=凭据错）"
           else
@@ -85,19 +87,21 @@ jobs:
             fail=1
           fi
 
-          # ③ 发文端点路径（这条是"路径哪天又被拼错就在 CI 露头"的保险）
-          good=$(post 'https://dev.to/api/articles' "$UA" 'probe-invalid-key')
-          dup=$(post 'https://dev.to/api/api/articles' "$UA" 'probe-invalid-key')
-          echo "③ 端点：/api/articles -> $good，/api/api/articles -> $dup"
+          # ③ 端点结构（"路径哪天又被拼错就在 CI 露头"的保险）。
+          #    用 /api/articles/me 这个**读**端点探路：路径对 → 401（被鉴权层拒），
+          #    多拼一层 /api → 404。两个码互不重叠，判据才立得住。
+          good=$(getcode 'https://dev.to/api/articles/me' "$UA" 'probe-invalid-key')
+          dup=$(getcode 'https://dev.to/api/api/articles/me' "$UA" 'probe-invalid-key')
+          echo "③ 端点结构：/api/articles/me -> $good，/api/api/articles/me -> $dup"
           if [ "$good" = "401" ] && [ "$dup" = "404" ]; then
-            echo "   ✅ 发文端点是 https://dev.to/api/articles（不是 /api/api/articles）"
+            echo "   ✅ 发文端点是 https://dev.to/api/articles（多拼一层 /api 会 404）"
           else
             echo "   ❌ 与 devto::articles_endpoint 的断言不符（预期 401/404）"
             fail=1
           fi
 
           [ "$fail" = "0" ] || exit 1
-          echo "✅ dev.to 侧契约全部通过：key 有效 / UA 门禁成立 / 端点路径正确"
+          echo "✅ dev.to 侧契约全部通过：key 有效 / UA 门禁成立 / 端点结构正确"
 
       # 可达性探针：拿到任何 HTTP 码都算"可达"，只有 000（连不上）才算失败。
       # 这条正好覆盖"厂商连不上导致整轮续期报废"的故障模式（2026-10-03 实测：
